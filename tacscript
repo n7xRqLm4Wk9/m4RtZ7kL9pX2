@@ -20,8 +20,6 @@ local VisualsTab  = Window:CreateTab("visuals",  4483362458)
 local CombatTab   = Window:CreateTab("combat",   4483362458)
 local MiscTab     = Window:CreateTab("misc",     4483362458)
 
--- ─── Settings ────────────────────────────────────────────────────────────────
-
 local S = {
     walkSpeedEnabled = false,
     walkSpeed        = 16,
@@ -38,8 +36,6 @@ local S = {
     antiDeathEnabled   = false,
     antiDeathTriggered = false,
 }
-
--- ─── NPC Classification (spawn proximity + State) ─────────────────────────────
 
 local npcTypeCache = {}
 local SPAWN_PROXIMITY = 20
@@ -79,7 +75,6 @@ local function classifyNPC(npc)
             return "civilian"
         end
     end
-    -- fallback to State attribute
     local state = npc:GetAttribute("State")
     local nonHostile = {Idle=true, Surrendered=true, Hesitating=true, ShoutHesitation=true, Stunned=true, Down=true, Tased=true}
     if nonHostile[state] then
@@ -100,8 +95,6 @@ local function shouldShowESP(npc)
     if not isCivilian(npc) then return true end
     return S.showCivilians
 end
-
--- ─── Part Finders ────────────────────────────────────────────────────────────
 
 local function getHead(npc)
     local highest
@@ -127,8 +120,6 @@ local function getTorso(npc)
     return closest
 end
 
--- ─── Wall Check ──────────────────────────────────────────────────────────────
-
 local function isVisible(part, model)
     if not part or not model then return false end
     local origin = Camera.CFrame.Position
@@ -139,8 +130,6 @@ local function isVisible(part, model)
     params.FilterDescendantsInstances = { player.Character or {}, model }
     return Workspace:Raycast(origin, dir.Unit * dir.Magnitude, params) == nil
 end
-
--- ─── Movement Loop ───────────────────────────────────────────────────────────
 
 RunService.RenderStepped:Connect(function()
     local char = player.Character
@@ -153,8 +142,6 @@ RunService.RenderStepped:Connect(function()
         hum.JumpPower    = S.jumpPower
     end
 end)
-
--- ─── ESP ─────────────────────────────────────────────────────────────────────
 
 local BONES = {
     { "Head",          "Torso"          },
@@ -247,11 +234,11 @@ end
 local function stateColor(npc, hum)
     if hum.Health <= 0 then return Color3.fromRGB(130, 130, 130) end
     if isCivilian(npc) then
-        return Color3.fromRGB(60, 220, 60)   -- green for civilians
+        return Color3.fromRGB(60, 220, 60)
     end
     local state = npc:GetAttribute("State")
     if state == "Investigating" then return Color3.fromRGB(255, 160, 0) end
-    return Color3.fromRGB(255, 60, 60)       -- red for hostiles
+    return Color3.fromRGB(255, 60, 60)
 end
 
 RunService.RenderStepped:Connect(function()
@@ -277,7 +264,6 @@ RunService.RenderStepped:Connect(function()
         local torso = getTorso(npc)
         local col   = stateColor(npc, hum)
 
-        -- Billboard
         local bb = getOrCreateBillboard(npc)
         if bb then
             bb.Enabled = show
@@ -293,7 +279,6 @@ RunService.RenderStepped:Connect(function()
             end
         end
 
-        -- Drawing lines
         local lines = getOrCreateLines(npc)
         if not show or not head or not torso or #lines == 0 then
             for _, l in ipairs(lines) do
@@ -304,7 +289,6 @@ RunService.RenderStepped:Connect(function()
 
         local idx = 1
 
-        -- Box
         if S.espBox and #lines >= idx + 3 then
             local p1, on1 = Camera:WorldToViewportPoint(head.Position  + Vector3.new(0, 0.7, 0))
             local p2, on2 = Camera:WorldToViewportPoint(torso.Position - Vector3.new(0, 3,   0))
@@ -337,7 +321,6 @@ RunService.RenderStepped:Connect(function()
             idx += 4
         end
 
-        -- Tracer
         if S.espTracers and #lines >= idx then
             local pos, on = Camera:WorldToViewportPoint(torso.Position)
             local l = lines[idx]
@@ -354,7 +337,6 @@ RunService.RenderStepped:Connect(function()
             idx += 1
         end
 
-        -- Skeleton
         if S.espSkeleton then
             for i, bone in ipairs(BONES) do
                 local l = lines[idx + i - 1]
@@ -379,7 +361,6 @@ RunService.RenderStepped:Connect(function()
         end
     end
 
-    -- Cleanup
     for npc, lines in pairs(drawingLines) do
         if not npc.Parent then
             for _, l in ipairs(lines) do
@@ -395,8 +376,6 @@ RunService.RenderStepped:Connect(function()
         end
     end
 end)
-
--- ─── Aimbot ───────────────────────────────────────────────────────────────────
 
 local fovCircle
 pcall(function()
@@ -456,8 +435,6 @@ local function stopAimbot()
     if fovCircle then fovCircle.Visible = false end
 end
 
--- ─── Anti-Death ───────────────────────────────────────────────────────────────
-
 local function antiDeathLoop()
     while S.antiDeathEnabled do
         task.wait(0.5)
@@ -482,8 +459,6 @@ local function antiDeathLoop()
     end
 end
 
--- ─── Bring NPCs ───────────────────────────────────────────────────────────────
-
 local function bringAllNPCs()
     local myRoot = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
     if not myRoot then return end
@@ -501,8 +476,6 @@ local function bringAllNPCs()
     Rayfield:Notify({ Title = "NPCs", Content = "Brought " .. count .. " NPC(s).", Duration = 3, Image = 4483362458 })
 end
 
--- ─── Performance Mode ────────────────────────────────────────────────────────
-
 local function enablePerformanceMode()
     local bloom = Lighting:FindFirstChildOfClass("BloomEffect")
     if bloom then bloom.Enabled = false end
@@ -513,8 +486,6 @@ local function enablePerformanceMode()
     end
     Rayfield:Notify({ Title = "Performance", Content = "Performance mode applied.", Duration = 3, Image = 4483362458 })
 end
-
--- ─── UI ──────────────────────────────────────────────────────────────────────
 
 MovementTab:CreateSection("speed and jump")
 MovementTab:CreateToggle({ Name = "custom walkspeed", CurrentValue = false, Callback = function(v) S.walkSpeedEnabled = v end })
