@@ -1,0 +1,358 @@
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local CoreGui = game:GetService("CoreGui")
+local Workspace = game:GetService("Workspace")
+local Lighting = game:GetService("Lighting")
+local UserInputService = game:GetService("UserInputService")
+
+local player = Players.LocalPlayer
+local camera = workspace.CurrentCamera
+
+local Window = Rayfield:CreateWindow({
+    Name = "Demonology (testing)",
+    LoadingTitle = "Welcome!",
+    LoadingSubtitle = "Loading",
+    ConfigurationSaving = { Enabled = false }
+})
+
+local MovementTab = Window:CreateTab("movement", 4483362458)
+local VisualsTab = Window:CreateTab("visuals", 4483362458)
+local GhostTab = Window:CreateTab("ghost", 4483362458)
+local EvidenceTab = Window:CreateTab("evidence", 4483362458)
+local MiscTab = Window:CreateTab("misc", 4483362458)
+
+-- Settings
+local S = {
+    walkSpeedEnabled = false,
+    walkSpeed = 50,
+    jumpEnabled = false,
+    jumpPower = 50,
+    noclip = false,
+    fly = false,
+    flySpeed = 50,
+    fullbright = false,
+    ghostESP = true,
+    ghostBox = true,
+    ghostTracer = false,
+    ghostName = true,
+    huntWarning = false,
+    evidenceESP = true,
+    boneESP = false,
+    cursedESP = true
+}
+
+-- Utility: find any object by name or attribute, recursively
+local function findInWorkspace(name, attr, attrValue)
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj.Name == name then
+            if attr then
+                if obj:GetAttribute(attr) == attrValue then return obj end
+            else
+                return obj
+            end
+        end
+    end
+    return nil
+end
+
+-- Movement bypass (WalkSpeed + JumpPower)
+RunService.RenderStepped:Connect(function()
+    local char = player.Character
+    if not char then return end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not hum then return end
+    if S.walkSpeedEnabled then hum.WalkSpeed = S.walkSpeed end
+    if S.jumpEnabled then hum.UseJumpPower = true; hum.JumpPower = S.jumpPower end
+end)
+
+-- NoClip loop
+RunService.Stepped:Connect(function()
+    if not S.noclip then return end
+    local char = player.Character
+    if char then
+        for _, part in ipairs(char:GetDescendants()) do
+            if part:IsA("BasePart") then part.CanCollide = false end
+        end
+    end
+end)
+
+-- Fly (mobile‑friendly, uses move direction)
+local flyConn, flyBodyGyro, flyBodyVelocity
+local function stopFly()
+    S.fly = false
+    if flyConn then flyConn:Disconnect(); flyConn = nil end
+    if flyBodyGyro then flyBodyGyro:Destroy(); flyBodyGyro = nil end
+    if flyBodyVelocity then flyBodyVelocity:Destroy(); flyBodyVelocity = nil end
+    local char = player.Character
+    if char then
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if hum then hum.PlatformStand = false end
+    end
+end
+local function startFly()
+    stopFly()
+    local char = player.Character
+    if not char then return end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    local root = char:FindFirstChild("HumanoidRootPart")
+    if not hum or not root then return end
+    S.fly = true
+    hum.PlatformStand = true
+    flyBodyGyro = Instance.new("BodyGyro"); flyBodyGyro.MaxTorque = Vector3.new(400000,400000,400000); flyBodyGyro.Parent = root
+    flyBodyVelocity = Instance.new("BodyVelocity"); flyBodyVelocity.MaxForce = Vector3.new(400000,400000,400000); flyBodyVelocity.Velocity = Vector3.zero; flyBodyVelocity.Parent = root
+    flyConn = RunService.RenderStepped:Connect(function()
+        if not S.fly or not root or not root.Parent then stopFly(); return end
+        local moveDir = (hum.MoveDirection * S.flySpeed)
+        flyBodyVelocity.Velocity = moveDir
+        flyBodyGyro.CFrame = camera.CFrame
+    end)
+end
+
+-- Fullbright loop
+task.spawn(function()
+    while true do
+        if S.fullbright then
+            Lighting.Ambient = Color3.new(1,1,1)
+            Lighting.OutdoorAmbient = Color3.new(1,1,1)
+        else
+            Lighting.Ambient = Color3.fromRGB(12,12,12)
+            Lighting.OutdoorAmbient = Color3.fromRGB(12,12,12)
+        end
+        task.wait(0.5)
+    end
+end)
+
+-- Ghost ESP system
+local ghostDrawings = {}  -- [ghostModel] = {lines, billboard}
+local function updateGhostESP()
+    -- Clean old drawings
+    for model, data in pairs(ghostDrawings) do
+        if not model.Parent then
+            if data.lines then for _, l in ipairs(data.lines) do l:Remove() end end
+            if data.billboard then data.billboard:Destroy() end
+            ghostDrawings[model] = nil
+        end
+    end
+
+    if not S.ghostESP then
+        for _, data in pairs(ghostDrawings) do
+            for _, l in ipairs(data.lines or {}) do l.Visible = false end
+            if data.billboard then data.billboard.Enabled = false end
+        end
+        return
+    end
+
+    local ghostModel = workspace:FindFirstChild("Ghost")
+    if not ghostModel then return end
+    local head = ghostModel:FindFirstChild("Head") or ghostModel:FindFirstChild("HumanoidRootPart")
+    if not head then return end
+    local root = ghostModel:FindFirstChild("HumanoidRootPart") or head
+
+    -- Create drawings if needed
+    if not ghostDrawings[ghostModel] then
+        local lines = {}
+        if S.ghostBox then
+            for i=1,4 do
+                local l = Drawing.new("Line"); l.Visible = false; l.Thickness = 1.5; l.Color = Color3.new(0,1,1)
+                table.insert(lines, l)
+            end
+        end
+        if S.ghostTracer then
+            local l = Drawing.new("Line"); l.Visible = false; l.Thickness = 1; l.Color = Color3.new(0,1,1)
+            table.insert(lines, l)
+        end
+        local bb = Instance.new("BillboardGui")
+        bb.AlwaysOnTop = true; bb.Size = UDim2.new(0,120,0,30); bb.StudsOffset = Vector3.new(0,3,0); bb.Adornee = head
+        bb.Parent = CoreGui or player.PlayerGui
+        local lbl = Instance.new("TextLabel", bb)
+        lbl.Size = UDim2.new(1,0,1,0); lbl.BackgroundTransparency = 1; lbl.TextColor3 = Color3.new(0,1,1); lbl.TextSize = 14; lbl.Font = Enum.Font.GothamBold
+        ghostDrawings[ghostModel] = {lines = lines, billboard = bb, label = lbl}
+    end
+
+    local data = ghostDrawings[ghostModel]
+    local lines = data.lines
+    local bb = data.billboard
+    local lbl = data.label
+    bb.Enabled = true
+    local ghostType = ghostModel:GetAttribute("GhostType") or "Unknown"
+    local state = ghostModel:GetAttribute("State") or "Idle"
+    local dist = math.floor((root.Position - camera.CFrame.Position).Magnitude)
+    lbl.Text = ghostType .. " [" .. state .. "] " .. dist .. "m"
+
+    local idx = 1
+    -- Box
+    if S.ghostBox and #lines >= 4 then
+        local p1, on1 = camera:WorldToViewportPoint(head.Position + Vector3.new(0,0.7,0))
+        local p2, on2 = camera:WorldToViewportPoint(root.Position - Vector3.new(0,3,0))
+        if on1 and on2 then
+            local h = math.abs(p1.Y - p2.Y); local w = h * 0.55
+            local cx, cy = p1.X, (p1.Y+p2.Y)/2
+            local corners = {Vector2.new(cx-w/2,cy-h/2), Vector2.new(cx+w/2,cy-h/2), Vector2.new(cx+w/2,cy+h/2), Vector2.new(cx-w/2,cy+h/2)}
+            for i=1,4 do lines[idx+i-1].From = corners[i]; lines[idx+i-1].To = corners[i%4+1]; lines[idx+i-1].Color = Color3.new(0,1,1); lines[idx+i-1].Visible = true end
+        else for i=0,3 do lines[idx+i].Visible = false end end
+        idx = idx + 4
+    end
+    -- Tracer
+    if S.ghostTracer and #lines >= idx then
+        local pos, on = camera:WorldToViewportPoint(root.Position)
+        if on then lines[idx].From = Vector2.new(camera.ViewportSize.X/2, camera.ViewportSize.Y); lines[idx].To = Vector2.new(pos.X, pos.Y); lines[idx].Color = Color3.new(0,1,1); lines[idx].Visible = true
+        else lines[idx].Visible = false end
+    end
+end
+RunService.RenderStepped:Connect(updateGhostESP)
+
+-- Hunt Warning (screen flash + notification)
+local lastHuntState = "Idle"
+task.spawn(function()
+    while true do
+        if S.huntWarning then
+            local ghost = workspace:FindFirstChild("Ghost")
+            if ghost then
+                local state = ghost:GetAttribute("State") or "Idle"
+                if state == "Hunting" and lastHuntState ~= "Hunting" then
+                    Rayfield:Notify({Title = "Ghost", Content = "The ghost is hunting!", Duration = 5, Image = 4483362458})
+                    -- brief red screen flash
+                    local flash = Instance.new("Frame")
+                    flash.Size = UDim2.fromScale(1,1); flash.BackgroundColor3 = Color3.new(1,0,0); flash.BackgroundTransparency = 0.8; flash.Parent = CoreGui or player.PlayerGui
+                    task.delay(0.5, function() flash:Destroy() end)
+                end
+                lastHuntState = state
+            end
+        end
+        task.wait(1)
+    end
+end)
+
+-- Evidence ESP (highlights fingerprints, orbs, writing, etc.)
+local evidenceObjects = {}
+local function updateEvidenceESP()
+    for _, obj in ipairs(evidenceObjects) do
+        if obj:IsA("Highlight") then obj:Destroy() end
+        if obj:IsA("BillboardGui") then obj:Destroy() end
+    end
+    evidenceObjects = {}
+    if not S.evidenceESP then return end
+
+    local evidenceNames = {"Fingerprint", "GhostOrb", "GhostWriting", "EMF", "Thermometer", "SpiritBox", "UVLight", "VideoCamera", "PhotoEvidence"}
+    for _, name in ipairs(evidenceNames) do
+        for _, obj in ipairs(workspace:GetDescendants()) do
+            if obj:IsA("BasePart") and obj.Name == name then
+                local hl = Instance.new("Highlight"); hl.FillColor = Color3.new(0,1,0); hl.OutlineColor = Color3.new(1,1,1); hl.Adornee = obj; hl.Parent = CoreGui or player.PlayerGui
+                table.insert(evidenceObjects, hl)
+            end
+        end
+    end
+    -- Bone evidence
+    if S.boneESP then
+        for _, obj in ipairs(workspace:GetDescendants()) do
+            if obj.Name == "Bone" and obj:IsA("BasePart") then
+                local hl = Instance.new("Highlight"); hl.FillColor = Color3.new(1,1,0); hl.OutlineColor = Color3.new(1,1,1); hl.Adornee = obj; hl.Parent = CoreGui or player.PlayerGui
+                table.insert(evidenceObjects, hl)
+            end
+        end
+    end
+    -- Cursed object
+    if S.cursedESP then
+        for _, obj in ipairs(workspace:GetDescendants()) do
+            if obj:GetAttribute("IsCursed") then
+                local hl = Instance.new("Highlight"); hl.FillColor = Color3.new(1,0,1); hl.OutlineColor = Color3.new(1,1,1); hl.Adornee = obj; hl.Parent = CoreGui or player.PlayerGui
+                table.insert(evidenceObjects, hl)
+            end
+        end
+    end
+end
+task.spawn(function()
+    while true do
+        if S.evidenceESP or S.boneESP or S.cursedESP then updateEvidenceESP() end
+        task.wait(5) -- refresh every 5 seconds to catch new spawns
+    end
+end)
+
+-- UI: Movement
+MovementTab:CreateSection("speed and jump")
+MovementTab:CreateToggle({Name = "custom walkspeed", CurrentValue = false, Callback = function(v) S.walkSpeedEnabled = v end})
+MovementTab:CreateSlider({Name = "walkspeed", Range = {16,500}, Increment = 5, CurrentValue = 50, Callback = function(v) S.walkSpeed = v end})
+MovementTab:CreateToggle({Name = "custom jumping", CurrentValue = false, Callback = function(v) S.jumpEnabled = v end})
+MovementTab:CreateSlider({Name = "jumppower", Range = {50,500}, Increment = 5, CurrentValue = 50, Callback = function(v) S.jumpPower = v end})
+MovementTab:CreateSection("other movement")
+MovementTab:CreateToggle({Name = "noclip", CurrentValue = false, Callback = function(v) S.noclip = v end})
+MovementTab:CreateToggle({Name = "fly", CurrentValue = false, Callback = function(v) if v then startFly() else stopFly() end end})
+MovementTab:CreateSlider({Name = "fly speed", Range = {20,300}, Increment = 10, CurrentValue = 50, Callback = function(v) S.flySpeed = v end})
+
+-- UI: Visuals
+VisualsTab:CreateSection("fullbright")
+VisualsTab:CreateToggle({Name = "loop fullbright", CurrentValue = false, Callback = function(v) S.fullbright = v end})
+VisualsTab:CreateSection("ghost esp")
+VisualsTab:CreateToggle({Name = "enable ghost esp", CurrentValue = false, Callback = function(v) S.ghostESP = v end})
+VisualsTab:CreateToggle({Name = "box", CurrentValue = true, Callback = function(v) S.ghostBox = v end})
+VisualsTab:CreateToggle({Name = "tracer", CurrentValue = false, Callback = function(v) S.ghostTracer = v end})
+VisualsTab:CreateToggle({Name = "name + state", CurrentValue = true, Callback = function(v) S.ghostName = v end})
+VisualsTab:CreateSection("evidence esp")
+VisualsTab:CreateToggle({Name = "show evidence items", CurrentValue = false, Callback = function(v) S.evidenceESP = v end})
+VisualsTab:CreateToggle({Name = "show bone", CurrentValue = false, Callback = function(v) S.boneESP = v end})
+VisualsTab:CreateToggle({Name = "show cursed object", CurrentValue = false, Callback = function(v) S.cursedESP = v end})
+
+-- UI: Ghost
+GhostTab:CreateSection("ghost info")
+local ghostTypeLabel = GhostTab:CreateLabel("Ghost Type: Checking...")
+local ghostStateLabel = GhostTab:CreateLabel("Ghost State: Checking...")
+task.spawn(function()
+    while true do
+        local ghost = workspace:FindFirstChild("Ghost")
+        if ghost then
+            local ghostType = ghost:GetAttribute("GhostType") or "Unknown"
+            local state = ghost:GetAttribute("State") or "Idle"
+            ghostTypeLabel:Set("Ghost Type: " .. ghostType)
+            ghostStateLabel:Set("Ghost State: " .. state)
+        else
+            ghostTypeLabel:Set("Ghost not found")
+            ghostStateLabel:Set("Ghost not found")
+        end
+        task.wait(2)
+    end
+end)
+
+GhostTab:CreateSection("warnings")
+GhostTab:CreateToggle({Name = "hunt warning", CurrentValue = false, Callback = function(v) S.huntWarning = v end})
+
+GhostTab:CreateSection("interaction")
+GhostTab:CreateButton({Name = "teleport to ghost", Callback = function()
+    local ghost = workspace:FindFirstChild("Ghost")
+    if not ghost then return end
+    local root = ghost:FindFirstChild("HumanoidRootPart")
+    local myRoot = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+    if root and myRoot then myRoot.CFrame = root.CFrame + Vector3.new(3,0,0) end
+end})
+
+-- UI: Misc
+MiscTab:CreateSection("server")
+MiscTab:CreateButton({Name = "rejoin server", Callback = function()
+    game:GetService("TeleportService"):Teleport(game.PlaceId, player)
+end})
+MiscTab:CreateButton({Name = "server hop", Callback = function()
+    local Http = game:GetService("HttpService")
+    local ok, servers = pcall(function() return Http:JSONDecode(game:HttpGet("https://games.roblox.com/v1/games/"..game.PlaceId.."/servers/Public?limit=100")) end)
+    if ok and servers.data then
+        for _, s in ipairs(servers.data) do
+            if s.id ~= game.JobId then
+                game:GetService("TeleportService"):TeleportToPlaceInstance(game.PlaceId, s.id, player)
+                return
+            end
+        end
+    end
+    Rayfield:Notify({Title = "Error", Content = "No server found", Duration = 3})
+end})
+MiscTab:CreateSection("utility")
+MiscTab:CreateToggle({Name = "anti afk", CurrentValue = false, Callback = function(v)
+    if v then
+        task.spawn(function()
+            while v do
+                task.wait(60)
+                if camera then camera.CFrame = camera.CFrame * CFrame.new(0,0,0.001) end
+            end
+        end)
+    end
+end})
+
+Rayfield:Notify({Title = "Demonology", Content = "Loaded, enjoy pookie <3", Duration = 3, Image = 4483362458})
