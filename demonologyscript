@@ -1,0 +1,723 @@
+local Rayfield = loadstring(game:HttpGet("https://sirius.menu/rayfield"))()
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local CoreGui = game:GetService("CoreGui")
+local Workspace = game:GetService("Workspace")
+local Lighting = game:GetService("Lighting")
+local UserInputService = game:GetService("UserInputService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TeleportService = game:GetService("TeleportService")
+local HttpService = game:GetService("HttpService")
+
+local player = Players.LocalPlayer
+local camera = workspace.CurrentCamera
+
+local Window = Rayfield:CreateWindow({
+    Name = "Demonology",
+    LoadingTitle = "Welcome!",
+    LoadingSubtitle = "Loading...",
+    ConfigurationSaving = { Enabled = false }
+})
+
+local MovementTab = Window:CreateTab("movement", 4483362458)
+local VisualsTab = Window:CreateTab("visuals", 4483362458)
+local GhostTab = Window:CreateTab("ghost", 4483362458)
+local EvidenceTab = Window:CreateTab("evidence", 4483362458)
+local PlayersTab = Window:CreateTab("players", 4483362458)
+local MiscTab = Window:CreateTab("misc", 4483362458)
+
+-- Settings
+local S = {
+    walkSpeedEnabled = false, walkSpeed = 50,
+    jumpEnabled = false, jumpPower = 50,
+    noclip = false,
+    fly = false, flySpeed = 50,
+    fullbright = false,
+    ghostESP = false, ghostBox = true, ghostTracer = false, ghostName = true,
+    ghostColor = Color3.fromRGB(0, 255, 255),
+    rgbGhost = false, rgbHue = 0,
+    huntWarning = false,
+    huntTeleport = false,
+    autoSpiritBox = false,
+    autoPhoto = false,
+    evidenceESP = false, boneESP = false, cursedESP = false,
+    handprintESP = false, orbESP = false, writingESP = false,
+    itemESP = false,
+    playerESP = false,
+    playerEnergy = false,
+    antiAFK = false
+}
+
+-- Utility
+local function getGhost()
+    return workspace:FindFirstChild("Ghost")
+end
+
+local function getGhostAttribute(attr)
+    local ghost = getGhost()
+    return ghost and ghost:GetAttribute(attr)
+end
+
+-- Evidence Types mapping (from ghost module scripts)
+local EVIDENCE_TO_TOOL = {
+    ["EMFLevel5"] = "EMF Reader",
+    ["SpiritBox"] = "Spirit Box",
+    ["LaserProjector"] = "DOTS Projector",
+    ["GhostOrb"] = "Video Camera",
+    ["GhostWriting"] = "Ghost Writing Book",
+    ["FreezingTemperatures"] = "Thermometer",
+    ["Handprints"] = "UV Light",
+    ["Wither"] = "Withered Plant",
+}
+
+local function getRequiredTools()
+    local tools = {}
+    local ghostType = getGhostAttribute("GhostType") or getGhostAttribute("Type")
+    if not ghostType then return tools end
+    local Modules = ReplicatedStorage:FindFirstChild("Modules")
+    if not Modules then return tools end
+    local ghostFolder = Modules:FindFirstChild(ghostType)
+    if not ghostFolder then return tools end
+    local ghostScript = ghostFolder:FindFirstChildOfClass("ModuleScript")
+    if not ghostScript then return tools end
+    local success, data = pcall(require, ghostScript)
+    if not success or not data.Evidence then return tools end
+    for _, ev in ipairs(data.Evidence) do
+        local toolName = EVIDENCE_TO_TOOL[tostring(ev)]
+        if toolName then table.insert(tools, toolName) end
+    end
+    return tools
+end
+
+-- Movement bypass
+RunService.RenderStepped:Connect(function()
+    local char = player.Character
+    if not char then return end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not hum then return end
+    if S.walkSpeedEnabled then hum.WalkSpeed = S.walkSpeed end
+    if S.jumpEnabled then hum.UseJumpPower = true; hum.JumpPower = S.jumpPower end
+end)
+
+-- NoClip
+RunService.Stepped:Connect(function()
+    if not S.noclip then return end
+    local char = player.Character
+    if char then
+        for _, part in ipairs(char:GetDescendants()) do
+            if part:IsA("BasePart") then part.CanCollide = false end
+        end
+    end
+end)
+
+-- Fly (mobile friendly)
+local flyConn, flyBodyGyro, flyBodyVelocity
+local function stopFly()
+    S.fly = false
+    if flyConn then flyConn:Disconnect(); flyConn = nil end
+    if flyBodyGyro then flyBodyGyro:Destroy(); flyBodyGyro = nil end
+    if flyBodyVelocity then flyBodyVelocity:Destroy(); flyBodyVelocity = nil end
+    local char = player.Character
+    if char then
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if hum then hum.PlatformStand = false end
+    end
+end
+local function startFly()
+    stopFly()
+    local char = player.Character
+    if not char then return end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    local root = char:FindFirstChild("HumanoidRootPart")
+    if not hum or not root then return end
+    S.fly = true
+    hum.PlatformStand = true
+    flyBodyGyro = Instance.new("BodyGyro"); flyBodyGyro.MaxTorque = Vector3.new(400000,400000,400000); flyBodyGyro.Parent = root
+    flyBodyVelocity = Instance.new("BodyVelocity"); flyBodyVelocity.MaxForce = Vector3.new(400000,400000,400000); flyBodyVelocity.Velocity = Vector3.zero; flyBodyVelocity.Parent = root
+    flyConn = RunService.RenderStepped:Connect(function()
+        if not S.fly or not root or not root.Parent then stopFly(); return end
+        local moveDir = (hum.MoveDirection * S.flySpeed)
+        flyBodyVelocity.Velocity = moveDir
+        flyBodyGyro.CFrame = camera.CFrame
+    end)
+end
+
+-- Fullbright
+task.spawn(function()
+    while true do
+        if S.fullbright then
+            Lighting.Ambient = Color3.new(1,1,1)
+            Lighting.OutdoorAmbient = Color3.new(1,1,1)
+        else
+            Lighting.Ambient = Color3.fromRGB(12,12,12)
+            Lighting.OutdoorAmbient = Color3.fromRGB(12,12,12)
+        end
+        task.wait(0.5)
+    end
+end)
+
+-- Ghost ESP system
+local ghostDrawings = {}
+local function updateGhostESP()
+    for model, data in pairs(ghostDrawings) do
+        if not model.Parent then
+            if data.lines then for _, l in ipairs(data.lines) do pcall(l.Remove, l) end end
+            if data.billboard then pcall(data.billboard.Destroy, data.billboard) end
+            ghostDrawings[model] = nil
+        end
+    end
+    if not S.ghostESP then
+        for _, data in pairs(ghostDrawings) do
+            for _, l in ipairs(data.lines or {}) do if l then l.Visible = false end end
+            if data.billboard then data.billboard.Enabled = false end
+        end
+        return
+    end
+
+    local ghostModel = getGhost()
+    if not ghostModel then return end
+    local head = ghostModel:FindFirstChild("Head") or ghostModel:FindFirstChild("HumanoidRootPart")
+    if not head then return end
+    local root = ghostModel:FindFirstChild("HumanoidRootPart") or head
+
+    if S.rgbGhost then
+        S.rgbHue = (S.rgbHue + 0.005) % 1
+        S.ghostColor = Color3.fromHSV(S.rgbHue, 1, 1)
+    end
+
+    if not ghostDrawings[ghostModel] then
+        local lines = {}
+        if S.ghostBox then for i=1,4 do pcall(function() local l = Drawing.new("Line"); l.Visible=false; l.Thickness=1.5; l.Color=S.ghostColor; table.insert(lines,l) end) end end
+        if S.ghostTracer then pcall(function() local l = Drawing.new("Line"); l.Visible=false; l.Thickness=1; l.Color=S.ghostColor; table.insert(lines,l) end) end
+        local bb = Instance.new("BillboardGui")
+        bb.AlwaysOnTop = true; bb.Size = UDim2.new(0,150,0,30); bb.StudsOffset = Vector3.new(0,3,0); bb.Adornee = head
+        pcall(function() bb.Parent = CoreGui end)
+        if not bb.Parent then bb.Parent = player:WaitForChild("PlayerGui") end
+        local lbl = Instance.new("TextLabel", bb)
+        lbl.Size = UDim2.new(1,0,1,0); lbl.BackgroundTransparency = 1; lbl.TextColor3 = S.ghostColor; lbl.TextSize = 13; lbl.Font = Enum.Font.GothamBold
+        ghostDrawings[ghostModel] = {lines = lines, billboard = bb, label = lbl}
+    end
+
+    local data = ghostDrawings[ghostModel]
+    local lines = data.lines
+    local bb = data.billboard
+    local lbl = data.label
+    bb.Enabled = S.ghostName
+    if S.ghostName then
+        local ghostType = ghostModel:GetAttribute("GhostType") or ghostModel:GetAttribute("Type") or ghostModel.Name or "Unknown"
+        local state = ghostModel:GetAttribute("State") or "Idle"
+        local dist = math.floor((root.Position - camera.CFrame.Position).Magnitude)
+        lbl.Text = ghostType .. " [" .. state .. "] " .. dist .. "m"
+        lbl.TextColor3 = S.ghostColor
+    end
+
+    local idx = 1
+    if S.ghostBox and #lines >= idx+3 then
+        local p1,on1 = camera:WorldToViewportPoint(head.Position + Vector3.new(0,0.7,0))
+        local p2,on2 = camera:WorldToViewportPoint(root.Position - Vector3.new(0,3,0))
+        if on1 and on2 then
+            local h = math.abs(p1.Y-p2.Y); local w = h*0.55
+            local cx,cy = p1.X, (p1.Y+p2.Y)/2
+            local corners = {Vector2.new(cx-w/2,cy-h/2), Vector2.new(cx+w/2,cy-h/2), Vector2.new(cx+w/2,cy+h/2), Vector2.new(cx-w/2,cy+h/2)}
+            for i=1,4 do
+                local l = lines[idx+i-1]
+                if l then l.From = corners[i]; l.To = corners[i%4+1]; l.Color = S.ghostColor; l.Visible = true end
+            end
+        else
+            for i=0,3 do if lines[idx+i] then lines[idx+i].Visible = false end end
+        end
+        idx = idx + 4
+    end
+    if S.ghostTracer and #lines >= idx then
+        local pos, on = camera:WorldToViewportPoint(root.Position)
+        local l = lines[idx]
+        if l then
+            if on then l.From = Vector2.new(camera.ViewportSize.X/2, camera.ViewportSize.Y); l.To = Vector2.new(pos.X,pos.Y); l.Color = S.ghostColor; l.Visible = true
+            else l.Visible = false end
+        end
+    end
+end
+RunService.RenderStepped:Connect(updateGhostESP)
+
+-- Live Evidence Checking (adapted from Ducko355)
+local function checkHandprints()
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("BasePart") and (obj.Name == "Handprint1" or obj.Name == "Handprint2" or obj.Name == "Footprint" or obj.Name == "Footprint1") then
+            return true
+        end
+    end
+    return false
+end
+
+local function checkGhostOrb()
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("BasePart") and obj.Name == "GhostOrb" then return true end
+    end
+    return false
+end
+
+local function checkEMF()
+    local level = 0
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("Folder") and obj.Name == "Indicators" then
+            for _, v in pairs(obj:GetChildren()) do
+                if v:IsA("BasePart") and v.Material == Enum.Material.Neon and tonumber(v.Name) > level then
+                    level = tonumber(v.Name)
+                end
+            end
+        end
+    end
+    return level
+end
+
+local function checkWither()
+    local itemsFolder = workspace:FindFirstChild("Items")
+    if itemsFolder then
+        for _, obj in ipairs(itemsFolder:GetDescendants()) do
+            if obj:IsA("BasePart") and obj.Name == "Petals" and obj.Color == Color3.new(0,0,0) then
+                return true
+            end
+        end
+    end
+    return false
+end
+
+local function checkGhostWriting()
+    local itemsFolder = workspace:FindFirstChild("Items")
+    if itemsFolder then
+        for _, obj in ipairs(itemsFolder:GetDescendants()) do
+            if obj:IsA("Decal") then
+                local model = obj:FindFirstAncestorWhichIsA("Model")
+                if model and model:GetAttribute("ItemName") == "Spirit Book" and obj.Texture ~= "" then
+                    return true
+                end
+            end
+        end
+    end
+    return false
+end
+
+local function checkSpiritBox()
+    local subtitles = player.PlayerGui:FindFirstChild("Subtitles")
+    if subtitles then
+        local holder = subtitles:FindFirstChild("Holder")
+        if holder then
+            local lbl = holder:FindFirstChild("TextLabel")
+            if lbl and #lbl.Text:gsub("%s+", "") >= 3 then
+                return true
+            end
+        end
+    end
+    return false
+end
+
+local function checkLaser()
+    local ghost = getGhost()
+    return ghost and ghost:GetAttribute("InLaser")
+end
+
+local function getLowestTemperature()
+    local lowest = 100
+    local lowestRoom = nil
+    local rooms = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Rooms")
+    if rooms then
+        for _, room in ipairs(rooms:GetChildren()) do
+            local temp = room:GetAttribute("Temperature")
+            if temp and temp < lowest then
+                lowest = temp
+                lowestRoom = room
+            end
+        end
+    end
+    return lowest, lowestRoom
+end
+
+-- Hunt Teleport via sound detection
+task.spawn(function()
+    workspace.DescendantAdded:Connect(function(descendant)
+        if S.huntTeleport and descendant:IsA("Sound") and descendant.Name == "Hunt" then
+            local pegboard = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Rooms") and workspace.Map.Rooms:FindFirstChild("Base Camp") and workspace.Map.Rooms["Base Camp"]:FindFirstChild("Pegboard")
+            if pegboard then
+                local union = pegboard:FindFirstChild("Union")
+                local char = player.Character
+                if union and char and char:FindFirstChild("HumanoidRootPart") then
+                    char.HumanoidRootPart.CFrame = union.CFrame + Vector3.new(0, 3, 0)
+                    Rayfield:Notify({Title = "Hunt Teleport", Content = "Teleported to pegboard!", Duration = 3, Image = 4483362458})
+                end
+            end
+        end
+    end)
+end)
+
+-- Hunt Warning
+local lastHuntState = "Idle"
+task.spawn(function()
+    while true do
+        local ghost = getGhost()
+        if ghost and S.huntWarning then
+            local state = ghost:GetAttribute("State") or "Idle"
+            if state == "Hunting" and lastHuntState ~= "Hunting" then
+                Rayfield:Notify({Title = "Ghost", Content = "The ghost is hunting!", Duration = 5, Image = 4483362458})
+                local flash = Instance.new("Frame")
+                flash.Size = UDim2.fromScale(1,1); flash.BackgroundColor3 = Color3.new(1,0,0); flash.BackgroundTransparency = 0.8
+                flash.Parent = CoreGui or player.PlayerGui
+                task.delay(0.5, function() flash:Destroy() end)
+            end
+            lastHuntState = state
+        end
+        task.wait(1)
+    end
+end)
+
+-- Auto Spirit Box
+local spiritBoxDelay = 0
+task.spawn(function()
+    while true do
+        if S.autoSpiritBox and tick() - spiritBoxDelay > 0.5 then
+            spiritBoxDelay = tick()
+            local ghost = getGhost()
+            if ghost and ghost:GetAttribute("Hunting") then
+                -- Teleport to pegboard during hunt
+                local pegboard = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Rooms") and workspace.Map.Rooms:FindFirstChild("Base Camp") and workspace.Map.Rooms["Base Camp"]:FindFirstChild("Pegboard")
+                if pegboard then
+                    local union = pegboard:FindFirstChild("Union")
+                    local char = player.Character
+                    if union and char and char:FindFirstChild("HumanoidRootPart") then
+                        char.HumanoidRootPart.CFrame = union.CFrame + Vector3.new(0, 3, 0)
+                    end
+                end
+            else
+                -- Teleport near ghost and ask
+                local char = player.Character
+                if char and char:FindFirstChild("HumanoidRootPart") and ghost:FindFirstChild("HumanoidRootPart") then
+                    char.HumanoidRootPart.CFrame = ghost.HumanoidRootPart.CFrame * CFrame.new(0, 0, 10)
+                end
+                -- Equip Spirit Box and ask
+                local events = ReplicatedStorage:FindFirstChild("Events")
+                if events then
+                    pcall(function()
+                        -- Pickup if not in inventory
+                        local found, slot = pcall(function()
+                            for _, obj in ipairs(player.PlayerGui:WaitForChild("Hotbar"):WaitForChild("Slots"):GetChildren()) do
+                                if obj:IsA("Frame") and obj.Name:find("InvSlot") and obj:FindFirstChild("ItemName") and obj.ItemName.Text == "Spirit Box" then
+                                    return true, tonumber(obj.Name:match("%d+"))
+                                end
+                            end
+                        end)
+                        if not found then
+                            local spiritBox = workspace.Items:FindFirstChild("Spirit Box")
+                            if spiritBox then events.RequestItemPickup:FireServer(spiritBox) task.wait(0.3) end
+                        end
+                        -- Equip
+                        for _, obj in ipairs(player.PlayerGui.Hotbar.Slots:GetChildren()) do
+                            if obj:IsA("Frame") and obj.Name:find("InvSlot") and obj:FindFirstChild("ItemName") and obj.ItemName.Text == "Spirit Box" then
+                                events.RequestItemEquip:FireServer("InvSlot" .. tonumber(obj.Name:match("%d+")))
+                                task.wait(0.2)
+                                events.ToggleItemState:FireServer(workspace.Items:FindFirstChild("Spirit Box"))
+                                break
+                            end
+                        end
+                        -- Ask question
+                        local questions = {"Are you far away?","Are you near?","Where are you?","What do you want?","When did you cross over?"}
+                        events.AskSpiritBoxFromUI:FireServer(questions[math.random(#questions)])
+                    end)
+                end
+            end
+        end
+        task.wait(0.5)
+    end
+end)
+
+-- Auto Photo
+local photoDb = false
+task.spawn(function()
+    while true do
+        if S.autoPhoto and not photoDb then
+            photoDb = true
+            local ghost = getGhost()
+            if ghost and not ghost:GetAttribute("Hunting") then
+                -- Equip photo camera
+                local events = ReplicatedStorage:FindFirstChild("Events")
+                if events then
+                    local function equipCamera()
+                        for _, obj in ipairs(player.PlayerGui.Hotbar.Slots:GetChildren()) do
+                            if obj:IsA("Frame") and obj.Name:find("InvSlot") and obj:FindFirstChild("ItemName") and obj.ItemName.Text == "Photo Camera" then
+                                events.RequestItemEquip:FireServer("InvSlot" .. tonumber(obj.Name:match("%d+")))
+                                return true
+                            end
+                        end
+                        local cam = workspace.Items:FindFirstChild("Photo Camera")
+                        if cam then events.RequestItemPickup:FireServer(cam) task.wait(0.3) return equipCamera() end
+                        return false
+                    end
+                    if equipCamera() then
+                        task.wait(0.5)
+                        -- Take photo of ghost
+                        events.TakePhotoWithCamera:FireServer(
+                            workspace.CurrentCamera.CFrame,
+                            {Stars = 3, Type = "Ghost", Object = ghost, Reward = 24}
+                        )
+                        Rayfield:Notify({Title = "Photo", Content = "3-star ghost photo taken!", Duration = 3, Image = 4483362458})
+                    end
+                end
+            end
+            task.wait(10)
+            photoDb = false
+        end
+        task.wait(1)
+    end
+end)
+
+-- Evidence ESP
+local evidenceObjects = {}
+local function updateEvidenceESP()
+    for _, obj in ipairs(evidenceObjects) do
+        if obj:IsA("Highlight") then obj:Destroy() end
+        if obj:IsA("BillboardGui") then obj:Destroy() end
+    end
+    evidenceObjects = {}
+    if not (S.evidenceESP or S.boneESP or S.cursedESP or S.handprintESP or S.orbESP or S.writingESP) then return end
+
+    local patterns = {}
+    if S.evidenceESP then patterns = {"Fingerprint","Handprint","Footprint","GhostOrb","GhostWriting","Writing","EMF","Thermometer","SpiritBox","Blacklight","UVLight","VideoCamera","PhotoEvidence","Freezing","DOTS","Projector","Withered","Plant"} end
+    if S.handprintESP then table.insert(patterns,"Handprint"); table.insert(patterns,"Fingerprint"); table.insert(patterns,"Footprint") end
+    if S.orbESP then table.insert(patterns,"GhostOrb") end
+    if S.writingESP then table.insert(patterns,"GhostWriting"); table.insert(patterns,"Writing") end
+    if S.boneESP then table.insert(patterns,"Bone") end
+    if S.cursedESP then table.insert(patterns,"Cursed") end
+
+    local seen = {}
+    for _, pattern in ipairs(patterns) do
+        for _, obj in ipairs(workspace:GetDescendants()) do
+            if obj:IsA("BasePart") and obj.Name:lower():find(pattern:lower()) and not seen[obj] then
+                seen[obj] = true
+                local hl = Instance.new("Highlight")
+                hl.FillColor = (pattern:find("Bone") or pattern:find("Cursed")) and Color3.new(1,1,0) or Color3.new(0,1,0)
+                hl.OutlineColor = Color3.new(1,1,1); hl.FillTransparency = 0.3; hl.Adornee = obj
+                pcall(function() hl.Parent = CoreGui end)
+                if not hl.Parent then hl.Parent = player:WaitForChild("PlayerGui") end
+                table.insert(evidenceObjects, hl)
+            end
+        end
+    end
+    if S.cursedESP then
+        for _, obj in ipairs(workspace:GetDescendants()) do
+            if obj:GetAttribute("IsCursed") and not seen[obj] then
+                seen[obj] = true
+                local hl = Instance.new("Highlight"); hl.FillColor = Color3.new(1,0,1); hl.OutlineColor = Color3.new(1,1,1); hl.FillTransparency = 0.3; hl.Adornee = obj
+                pcall(function() hl.Parent = CoreGui end)
+                if not hl.Parent then hl.Parent = player:WaitForChild("PlayerGui") end
+                table.insert(evidenceObjects, hl)
+            end
+        end
+    end
+end
+task.spawn(function() while true do if S.evidenceESP or S.boneESP or S.cursedESP or S.handprintESP or S.orbESP or S.writingESP then updateEvidenceESP() end task.wait(5) end end)
+
+-- Item ESP
+local itemEspObjects = {}
+local function updateItemESP()
+    for _, obj in ipairs(itemEspObjects) do obj:Destroy() end
+    itemEspObjects = {}
+    if not S.itemESP then return end
+    local itemsFolder = workspace:FindFirstChild("Items")
+    if not itemsFolder then return end
+    for _, model in ipairs(itemsFolder:GetChildren()) do
+        if model:IsA("Model") and model:GetAttribute("ItemName") then
+            local hl = Instance.new("Highlight"); hl.FillColor = Color3.new(1,0.67,0); hl.OutlineColor = Color3.new(1,1,1); hl.FillTransparency = 0.5; hl.Adornee = model
+            pcall(function() hl.Parent = CoreGui end)
+            if not hl.Parent then hl.Parent = player:WaitForChild("PlayerGui") end
+            table.insert(itemEspObjects, hl)
+        end
+    end
+end
+task.spawn(function() while true do if S.itemESP then updateItemESP() end task.wait(10) end end)
+
+-- Player ESP
+local playerEspObjects = {}
+local function updatePlayerESP()
+    for _, obj in ipairs(playerEspObjects) do obj:Destroy() end
+    playerEspObjects = {}
+    if not S.playerESP then return end
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= player and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
+            local hl = Instance.new("Highlight"); hl.FillColor = Color3.new(0,0.67,1); hl.OutlineColor = Color3.new(1,1,1); hl.FillTransparency = 0.5; hl.Adornee = plr.Character
+            pcall(function() hl.Parent = CoreGui end)
+            if not hl.Parent then hl.Parent = player:WaitForChild("PlayerGui") end
+            table.insert(playerEspObjects, hl)
+        end
+    end
+end
+task.spawn(function() while true do if S.playerESP then updatePlayerESP() end task.wait(5) end end)
+
+-- Teleport to Ghost & Equip Tools
+local function teleportAndEquip()
+    local ghost = getGhost()
+    if not ghost then Rayfield:Notify({Title = "Error", Content = "Ghost not found!", Duration = 3}) return end
+    local root = ghost:FindFirstChild("HumanoidRootPart")
+    local myRoot = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+    if root and myRoot then myRoot.CFrame = root.CFrame + Vector3.new(3,0,0) end
+    local tools = getRequiredTools()
+    local events = ReplicatedStorage:FindFirstChild("Events")
+    if events then
+        for _, toolName in ipairs(tools) do
+            pcall(function() events.ChangeSelectedItem:FireServer(toolName) end)
+        end
+        Rayfield:Notify({Title = "Tools", Content = "Equipped: " .. table.concat(tools, ", "), Duration = 4})
+    end
+end
+
+-- UI: Movement
+MovementTab:CreateSection("speed and jump")
+MovementTab:CreateToggle({Name = "custom walkspeed", CurrentValue = false, Callback = function(v) S.walkSpeedEnabled = v end})
+MovementTab:CreateSlider({Name = "walkspeed", Range = {16,500}, Increment = 5, CurrentValue = 50, Callback = function(v) S.walkSpeed = v end})
+MovementTab:CreateToggle({Name = "custom jumping", CurrentValue = false, Callback = function(v) S.jumpEnabled = v end})
+MovementTab:CreateSlider({Name = "jumppower", Range = {50,500}, Increment = 5, CurrentValue = 50, Callback = function(v) S.jumpPower = v end})
+MovementTab:CreateSection("other")
+MovementTab:CreateToggle({Name = "noclip", CurrentValue = false, Callback = function(v) S.noclip = v end})
+MovementTab:CreateToggle({Name = "fly", CurrentValue = false, Callback = function(v) if v then startFly() else stopFly() end end})
+MovementTab:CreateSlider({Name = "fly speed", Range = {20,300}, Increment = 10, CurrentValue = 50, Callback = function(v) S.flySpeed = v end})
+
+-- UI: Visuals
+VisualsTab:CreateSection("world")
+VisualsTab:CreateToggle({Name = "fullbright", CurrentValue = false, Callback = function(v) S.fullbright = v end})
+VisualsTab:CreateSection("ghost esp")
+VisualsTab:CreateToggle({Name = "enable ghost esp", CurrentValue = false, Callback = function(v) S.ghostESP = v end})
+VisualsTab:CreateToggle({Name = "box", CurrentValue = true, Callback = function(v) S.ghostBox = v end})
+VisualsTab:CreateToggle({Name = "tracer", CurrentValue = false, Callback = function(v) S.ghostTracer = v end})
+VisualsTab:CreateToggle({Name = "name + state", CurrentValue = true, Callback = function(v) S.ghostName = v end})
+VisualsTab:CreateSection("esp color")
+VisualsTab:CreateColorPicker({Name = "esp color", Color = S.ghostColor, Callback = function(c) S.rgbGhost = false; S.ghostColor = c end})
+VisualsTab:CreateToggle({Name = "rgb cycle", CurrentValue = false, Callback = function(v) S.rgbGhost = v end})
+VisualsTab:CreateSection("other esp")
+VisualsTab:CreateToggle({Name = "item esp", CurrentValue = false, Callback = function(v) S.itemESP = v end})
+VisualsTab:CreateToggle({Name = "player esp", CurrentValue = false, Callback = function(v) S.playerESP = v end})
+
+-- UI: Ghost Tab
+GhostTab:CreateSection("ghost info")
+local ghostTypeLabel = GhostTab:CreateLabel("Ghost Type: Waiting...")
+local ghostStateLabel = GhostTab:CreateLabel("Ghost State: Waiting...")
+local ghostSpeedLabel = GhostTab:CreateLabel("Ghost Speed: --")
+local ghostRoomLabel = GhostTab:CreateLabel("Favorite Room: --")
+task.spawn(function()
+    while true do
+        local ghost = getGhost()
+        if ghost then
+            local ghostType = ghost:GetAttribute("GhostType") or ghost:GetAttribute("Type") or "Unknown"
+            local state = ghost:GetAttribute("State") or "Idle"
+            local speed = ghost:GetAttribute("GhostSpeed") or "--"
+            local room = ghost:GetAttribute("FavoriteRoom") or ghost:GetAttribute("CurrentRoom") or "--"
+            ghostTypeLabel:Set("Ghost Type: " .. ghostType)
+            ghostStateLabel:Set("Ghost State: " .. state)
+            ghostSpeedLabel:Set("Ghost Speed: " .. tostring(speed))
+            ghostRoomLabel:Set("Favorite Room: " .. room)
+        end
+        task.wait(2)
+    end
+end)
+
+GhostTab:CreateSection("evidence requirements")
+local evidenceLabel1 = GhostTab:CreateLabel("--")
+local evidenceLabel2 = GhostTab:CreateLabel("--")
+local evidenceLabel3 = GhostTab:CreateLabel("--")
+task.spawn(function()
+    while true do
+        local tools = getRequiredTools()
+        evidenceLabel1:Set(tools[1] or "--")
+        evidenceLabel2:Set(tools[2] or "--")
+        evidenceLabel3:Set(tools[3] or "--")
+        task.wait(5)
+    end
+end)
+
+GhostTab:CreateSection("live evidence")
+local tempLabel = GhostTab:CreateLabel("Temperature: --")
+local emfLabel = GhostTab:CreateLabel("EMF Level: --")
+local orbLabel = GhostTab:CreateLabel("Ghost Orb: No")
+local handprintLabel = GhostTab:CreateLabel("Handprints: No")
+local writingLabel = GhostTab:CreateLabel("Ghost Writing: No")
+local witherLabel = GhostTab:CreateLabel("Wither: No")
+local spiritLabel = GhostTab:CreateLabel("Spirit Box: No")
+local laserLabel = GhostTab:CreateLabel("Laser Projector: No")
+task.spawn(function()
+    while true do
+        local temp, room = getLowestTemperature()
+        tempLabel:Set(string.format("Temperature: %.1f°C (%s)", temp, room and room.Name or "--"))
+        emfLabel:Set("EMF Level: " .. checkEMF())
+        orbLabel:Set("Ghost Orb: " .. (checkGhostOrb() and "Yes" or "No"))
+        handprintLabel:Set("Handprints: " .. (checkHandprints() and "Yes" or "No"))
+        writingLabel:Set("Ghost Writing: " .. (checkGhostWriting() and "Yes" or "No"))
+        witherLabel:Set("Wither: " .. (checkWither() and "Yes" or "No"))
+        spiritLabel:Set("Spirit Box: " .. (checkSpiritBox() and "Yes" or "No"))
+        laserLabel:Set("Laser Projector: " .. (checkLaser() and "Yes" or "No"))
+        task.wait(1)
+    end
+end)
+
+GhostTab:CreateSection("actions")
+GhostTab:CreateButton({Name = "teleport to ghost & equip tools", Callback = teleportAndEquip})
+GhostTab:CreateButton({Name = "teleport to ghost only", Callback = function()
+    local ghost = getGhost()
+    if not ghost then return end
+    local root = ghost:FindFirstChild("HumanoidRootPart")
+    local myRoot = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+    if root and myRoot then myRoot.CFrame = root.CFrame + Vector3.new(3,0,0) end
+end})
+GhostTab:CreateSection("auto modules")
+GhostTab:CreateToggle({Name = "hunt warning", CurrentValue = false, Callback = function(v) S.huntWarning = v end})
+GhostTab:CreateToggle({Name = "hunt teleport (to pegboard)", CurrentValue = false, Callback = function(v) S.huntTeleport = v end})
+GhostTab:CreateToggle({Name = "auto spirit box", CurrentValue = false, Callback = function(v) S.autoSpiritBox = v end})
+GhostTab:CreateToggle({Name = "auto photo (3 stars)", CurrentValue = false, Callback = function(v) S.autoPhoto = v end})
+
+-- UI: Evidence Tab
+EvidenceTab:CreateSection("evidence esp")
+EvidenceTab:CreateToggle({Name = "all evidence items", CurrentValue = false, Callback = function(v) S.evidenceESP = v end})
+EvidenceTab:CreateToggle({Name = "handprints only", CurrentValue = false, Callback = function(v) S.handprintESP = v end})
+EvidenceTab:CreateToggle({Name = "ghost orbs only", CurrentValue = false, Callback = function(v) S.orbESP = v end})
+EvidenceTab:CreateToggle({Name = "ghost writing only", CurrentValue = false, Callback = function(v) S.writingESP = v end})
+EvidenceTab:CreateSection("other finds")
+EvidenceTab:CreateToggle({Name = "show bone", CurrentValue = false, Callback = function(v) S.boneESP = v end})
+EvidenceTab:CreateToggle({Name = "show cursed object", CurrentValue = false, Callback = function(v) S.cursedESP = v end})
+
+-- UI: Players Tab
+PlayersTab:CreateSection("player list")
+local playerListLabel = PlayersTab:CreateLabel("Player energy loading...")
+task.spawn(function()
+    while true do
+        local lines = {}
+        for _, plr in ipairs(Players:GetPlayers()) do
+            local energy = plr:GetAttribute("Energy")
+            if energy then
+                table.insert(lines, plr.Name .. ": " .. math.floor(energy) .. "%")
+            end
+        end
+        playerListLabel:Set(#lines > 0 and table.concat(lines, "\n") or "No players with energy data")
+        task.wait(2)
+    end
+end)
+PlayersTab:CreateToggle({Name = "player esp", CurrentValue = false, Callback = function(v) S.playerESP = v end})
+
+-- UI: Misc
+MiscTab:CreateSection("server")
+MiscTab:CreateButton({Name = "rejoin server", Callback = function() TeleportService:Teleport(game.PlaceId, player) end})
+MiscTab:CreateButton({Name = "server hop", Callback = function()
+    local ok, servers = pcall(function() return HttpService:JSONDecode(game:HttpGet("https://games.roblox.com/v1/games/"..game.PlaceId.."/servers/Public?limit=100")) end)
+    if ok and servers.data then
+        for _, s in ipairs(servers.data) do
+            if s.id ~= game.JobId then TeleportService:TeleportToPlaceInstance(game.PlaceId, s.id, player) return end
+        end
+    end
+    Rayfield:Notify({Title = "Error", Content = "No server found", Duration = 3})
+end})
+MiscTab:CreateSection("utility")
+MiscTab:CreateToggle({Name = "anti afk", CurrentValue = false, Callback = function(v) S.antiAFK = v; if v then task.spawn(function() while S.antiAFK do task.wait(60) if camera then camera.CFrame = camera.CFrame * CFrame.new(0,0,0.001) end end end) end end})
+MiscTab:CreateButton({Name = "open exit door", Callback = function()
+    for _, model in ipairs(workspace:GetDescendants()) do
+        if model:IsA("Model") and model.Name == "ExitDoor" then
+            local door = model:FindFirstChild("Door")
+            if door then ReplicatedStorage.Events.ClientChangeDoorState:FireServer(door) end
+        end
+    end
+end})
+
+Rayfield:Notify({Title = "Demonology", Content = "Loaded, enjoy pookie <3", Duration = 3, Image = 4483362458})
