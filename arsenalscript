@@ -1,0 +1,436 @@
+local Rayfield = loadstring(game:HttpGet("https://sirius.menu/rayfield"))()
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Camera = workspace.CurrentCamera
+
+local LocalPlayer = Players.LocalPlayer
+
+local Window = Rayfield:CreateWindow({
+    Name = "Arsenal",
+    LoadingTitle = "Welcome!",
+    LoadingSubtitle = "Loading...",
+    ConfigurationSaving = { Enabled = false }
+})
+
+local AimbotTab = Window:CreateTab("aimbot", 4483362458)
+local ESPTab = Window:CreateTab("esp", 4483362458)
+local MovementTab = Window:CreateTab("movement", 4483362458)
+local WeaponTab = Window:CreateTab("weapons", 4483362458)
+
+-- Settings
+local S = {
+    -- Aimbot
+    aimbotEnabled = false,
+    aimbotFOV = 55,
+    aimbotSmoothness = 0.03,
+    aimbotShowFOV = true,
+    aimbotTeamCheck = true,
+    -- ESP
+    espEnabled = true,
+    espBox = true,
+    espSkeleton = true,
+    espTracers = false,
+    espColor = Color3.fromRGB(255, 255, 255),
+    espTeamCheck = true,
+    -- Silent Aim (hitbox expander)
+    silentAimEnabled = false,
+    -- Movement
+    walkSpeedEnabled = false,
+    walkSpeed = 100,
+    jumpPowerEnabled = false,
+    jumpPower = 50,
+    infJumpEnabled = false,
+    -- Weapon mods
+    noRecoil = false,
+    fastFire = false,
+    infAmmo = false,
+}
+
+-- Aimbot utility
+local function getClosestPlayer()
+    local target = nil
+    local maxDistance = S.aimbotFOV
+    local mousePos = UserInputService:GetMouseLocation()
+
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr == LocalPlayer then continue end
+        if S.aimbotTeamCheck and plr.Team == LocalPlayer.Team then continue end
+        local char = plr.Character
+        if not char then continue end
+        local hrp = char:FindFirstChild("HumanoidRootPart")
+        if not hrp then continue end
+        local hum = char:FindFirstChild("Humanoid")
+        if not hum or hum.Health <= 0 then continue end
+
+        local screenPos = Camera:WorldToViewportPoint(hrp.Position)
+        local distance = (Vector2.new(mousePos.X, mousePos.Y) - Vector2.new(screenPos.X, screenPos.Y)).Magnitude
+        if distance < maxDistance then
+            target = plr
+            maxDistance = distance
+        end
+    end
+    return target
+end
+
+-- ESP Part Finder
+local function findPart(model, partType)
+    if not model then return nil end
+    local aliases = {
+        Head = {"Head"},
+        HumanoidRootPart = {"HumanoidRootPart", "RootPart", "Root", "Torso", "UpperTorso"},
+        Torso = {"UpperTorso", "Torso"},
+        LeftUpperArm = {"LeftUpperArm", "Left Arm"},
+        RightUpperArm = {"RightUpperArm", "Right Arm"},
+        LeftUpperLeg = {"LeftUpperLeg", "Left Leg"},
+        RightUpperLeg = {"RightUpperLeg", "Right Leg"},
+        LeftLowerArm = {"LeftLowerArm", "Left Arm"},
+        RightLowerArm = {"RightLowerArm", "Right Arm"},
+        LeftLowerLeg = {"LeftLowerLeg", "Left Leg"},
+        RightLowerLeg = {"RightLowerLeg", "Right Leg"},
+        LeftHand = {"LeftHand", "Left Arm"},
+        RightHand = {"RightHand", "Right Arm"},
+        LeftFoot = {"LeftFoot", "Left Leg"},
+        RightFoot = {"RightFoot", "Right Leg"},
+    }
+    local search = aliases[partType] or {partType}
+    for _, name in ipairs(search) do
+        local p = model:FindFirstChild(name)
+        if p and p:IsA("BasePart") then return p end
+    end
+    return nil
+end
+
+-- ESP Skeleton bones (covers R6 and R15)
+local SKELETON_BONES = {
+    {"Head","Torso"}, {"Head","UpperTorso"},
+    {"UpperTorso","LowerTorso"}, {"LowerTorso","HumanoidRootPart"}, {"Torso","HumanoidRootPart"},
+    {"UpperTorso","LeftUpperArm"}, {"Torso","Left Arm"},
+    {"LeftUpperArm","LeftLowerArm"}, {"LeftLowerArm","LeftHand"},
+    {"UpperTorso","RightUpperArm"}, {"Torso","Right Arm"},
+    {"RightUpperArm","RightLowerArm"}, {"RightLowerArm","RightHand"},
+    {"LowerTorso","LeftUpperLeg"}, {"Torso","Left Leg"},
+    {"LeftUpperLeg","LeftLowerLeg"}, {"LeftLowerLeg","LeftFoot"},
+    {"LowerTorso","RightUpperLeg"}, {"Torso","Right Leg"},
+    {"RightUpperLeg","RightLowerLeg"}, {"RightLowerLeg","RightFoot"},
+}
+
+-- ESP Drawing storage
+local espLines = {}       -- [player] = { line1, line2, ... }
+local espRenderConn = nil
+
+local function newLine(thick)
+    local ok, l = pcall(function()
+        local line = Drawing.new("Line")
+        line.Visible = false
+        line.Thickness = thick or 1.5
+        line.Color = S.espColor
+        return line
+    end)
+    return ok and l or nil
+end
+
+local function clearAllESP()
+    if espRenderConn then espRenderConn:Disconnect(); espRenderConn = nil end
+    for _, lines in pairs(espLines) do
+        for _, l in ipairs(lines) do
+            if l then pcall(l.Remove, l) end
+        end
+    end
+    espLines = {}
+end
+
+local function createESPForPlayer(plr)
+    if espLines[plr] then return end
+    local lines = {}
+    if S.espBox then
+        for i = 1, 4 do table.insert(lines, newLine(1.5)) end
+    end
+    if S.espTracers then
+        table.insert(lines, newLine(1))
+    end
+    if S.espSkeleton then
+        for i = 1, #SKELETON_BONES do table.insert(lines, newLine(1)) end
+    end
+    -- Remove any nil entries (in case Drawing creation failed)
+    for i = #lines, 1, -1 do
+        if not lines[i] then table.remove(lines, i) end
+    end
+    espLines[plr] = lines
+end
+
+local function refreshESP()
+    clearAllESP()
+    if not S.espEnabled then return end
+
+    -- Create lines for all existing players
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer then createESPForPlayer(plr) end
+    end
+
+    -- Start render loop
+    espRenderConn = RunService.RenderStepped:Connect(function()
+        if not S.espEnabled then return end
+        local vp = Camera.ViewportSize
+
+        for plr, lines in pairs(espLines) do
+            local char = plr.Character
+            if not char then
+                for _, l in ipairs(lines) do if l then l.Visible = false end end
+                continue
+            end
+
+            -- Team check
+            if S.espTeamCheck and plr.Team == LocalPlayer.Team then
+                for _, l in ipairs(lines) do if l then l.Visible = false end end
+                continue
+            end
+
+            local hrp = findPart(char, "HumanoidRootPart")
+            local head = findPart(char, "Head")
+            if not hrp or not head then
+                for _, l in ipairs(lines) do if l then l.Visible = false end end
+                continue
+            end
+
+            local idx = 1
+            local color = S.espColor
+
+            -- Box (4 lines)
+            if S.espBox and #lines >= idx + 3 then
+                local p1, on1 = Camera:WorldToViewportPoint(head.Position + Vector3.new(0, 0.7, 0))
+                local p2, on2 = Camera:WorldToViewportPoint(hrp.Position - Vector3.new(0, 3, 0))
+                if on1 and on2 then
+                    local h = math.abs(p1.Y - p2.Y)
+                    local w = h * 0.55
+                    local cx, cy = p1.X, (p1.Y + p2.Y) / 2
+                    local corners = {
+                        Vector2.new(cx - w/2, cy - h/2),
+                        Vector2.new(cx + w/2, cy - h/2),
+                        Vector2.new(cx + w/2, cy + h/2),
+                        Vector2.new(cx - w/2, cy + h/2),
+                    }
+                    for i = 1, 4 do
+                        local l = lines[idx + i - 1]
+                        if l then l.From = corners[i]; l.To = corners[i % 4 + 1]; l.Color = color; l.Visible = true end
+                    end
+                else
+                    for i = 0, 3 do if lines[idx + i] then lines[idx + i].Visible = false end end
+                end
+                idx = idx + 4
+            end
+
+            -- Tracer (1 line)
+            if S.espTracers and #lines >= idx then
+                local pos, on = Camera:WorldToViewportPoint(hrp.Position)
+                local l = lines[idx]
+                if l then
+                    if on then
+                        l.From = Vector2.new(vp.X / 2, vp.Y)
+                        l.To = Vector2.new(pos.X, pos.Y)
+                        l.Color = color
+                        l.Visible = true
+                    else
+                        l.Visible = false
+                    end
+                end
+                idx = idx + 1
+            end
+
+            -- Skeleton (#SKELETON_BONES lines)
+            if S.espSkeleton then
+                for i, bone in ipairs(SKELETON_BONES) do
+                    local l = lines[idx + i - 1]
+                    if not l then continue end
+                    local pA = findPart(char, bone[1])
+                    local pB = findPart(char, bone[2])
+                    if pA and pB then
+                        local a, onA = Camera:WorldToViewportPoint(pA.Position)
+                        local b, onB = Camera:WorldToViewportPoint(pB.Position)
+                        if onA and onB then
+                            l.From = Vector2.new(a.X, a.Y)
+                            l.To = Vector2.new(b.X, b.Y)
+                            l.Color = color
+                            l.Visible = true
+                        else
+                            l.Visible = false
+                        end
+                    else
+                        l.Visible = false
+                    end
+                end
+            end
+        end
+
+        -- Cleanup for removed players
+        for plr, lines in pairs(espLines) do
+            if not plr.Parent then
+                for _, l in ipairs(lines) do if l then pcall(l.Remove, l) end end
+                espLines[plr] = nil
+            end
+        end
+    end)
+end
+
+-- Aimbot (unchanged core)
+local fovCircle = Drawing.new("Circle")
+fovCircle.Visible = false
+fovCircle.Filled = false
+fovCircle.Thickness = 1
+fovCircle.Color = Color3.fromRGB(255, 255, 255)
+fovCircle.NumSides = 64
+
+local aimbotConn = nil
+local isHoldingRight = false
+
+UserInputService.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton2 then
+        isHoldingRight = true
+    end
+end)
+UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton2 then
+        isHoldingRight = false
+    end
+end)
+
+local function startAimbot()
+    if aimbotConn then aimbotConn:Disconnect() end
+    aimbotConn = RunService.RenderStepped:Connect(function()
+        fovCircle.Position = Vector2.new(UserInputService:GetMouseLocation().X, UserInputService:GetMouseLocation().Y)
+        fovCircle.Radius = S.aimbotFOV
+        fovCircle.Visible = S.aimbotShowFOV and S.aimbotEnabled
+
+        if S.aimbotEnabled and isHoldingRight then
+            local target = getClosestPlayer()
+            if target and target.Character then
+                local aimPart = findPart(target.Character, "Head") or target.Character:FindFirstChild("Head")
+                if aimPart then
+                    local lookAt = CFrame.new(Camera.CFrame.Position, aimPart.Position)
+                    Camera.CFrame = Camera.CFrame:Lerp(lookAt, S.aimbotSmoothness)
+                end
+            end
+        end
+    end)
+end
+local function stopAimbot()
+    if aimbotConn then aimbotConn:Disconnect(); aimbotConn = nil end
+    fovCircle.Visible = false
+end
+
+-- Silent Aim (hitbox expander)
+local silentAimConn
+local function startSilentAim()
+    silentAimConn = RunService.Heartbeat:Connect(function()
+        for _, plr in ipairs(Players:GetPlayers()) do
+            if plr == LocalPlayer then continue end
+            local char = plr.Character
+            if not char then continue end
+            for _, partName in ipairs({"RightUpperLeg", "LeftUpperLeg", "HeadHB", "HumanoidRootPart"}) do
+                local part = char:FindFirstChild(partName)
+                if part and part:IsA("BasePart") then
+                    part.CanCollide = false
+                    part.Transparency = 1
+                    part.Size = Vector3.new(13, 13, 13)
+                end
+            end
+        end
+    end)
+end
+local function stopSilentAim()
+    if silentAimConn then silentAimConn:Disconnect(); silentAimConn = nil end
+end
+
+-- Movement Overrides
+RunService.RenderStepped:Connect(function()
+    local char = LocalPlayer.Character
+    if not char then return end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not hum then return end
+    if S.walkSpeedEnabled then hum.WalkSpeed = S.walkSpeed end
+    if S.jumpPowerEnabled then
+        hum.UseJumpPower = true
+        hum.JumpPower = S.jumpPower
+    end
+end)
+
+UserInputService.JumpRequest:Connect(function()
+    if S.infJumpEnabled then
+        local char = LocalPlayer.Character
+        if char then
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            if hum then hum:ChangeState(Enum.HumanoidStateType.Jumping) end
+        end
+    end
+end)
+
+-- Weapon Mods loops
+task.spawn(function()
+    while true do
+        if S.noRecoil then
+            for _, v in ipairs(ReplicatedStorage.Weapons:GetDescendants()) do
+                if v.Name == "RecoilControl" then v.Value = 0 end
+                if v.Name == "MaxSpread" then v.Value = 0 end
+            end
+        end
+        if S.fastFire then
+            for _, v in ipairs(ReplicatedStorage.Weapons:GetDescendants()) do
+                if v.Name == "Auto" then v.Value = true end
+                if v.Name == "FireRate" then v.Value = 0.02 end
+            end
+        end
+        task.wait(5)
+    end
+end)
+
+task.spawn(function()
+    while true do
+        if S.infAmmo then
+            local gui = LocalPlayer:FindFirstChild("PlayerGui")
+            if gui then
+                local variables = gui:FindFirstChild("GUI") and gui.GUI:FindFirstChild("Client") and gui.GUI.Client:FindFirstChild("Variables")
+                if variables then
+                    pcall(function()
+                        variables.ammocount.Value = 999
+                        variables.ammocount2.Value = 999
+                    end)
+                end
+            end
+        end
+        task.wait(0.5)
+    end
+end)
+
+-- UI Elements
+AimbotTab:CreateSection("aimbot settings")
+AimbotTab:CreateToggle({ Name = "enable aimbot", CurrentValue = false, Callback = function(v) S.aimbotEnabled = v; if v then startAimbot() else stopAimbot() end end })
+AimbotTab:CreateSlider({ Name = "fov radius", Range = {20, 200}, Increment = 5, CurrentValue = 55, Callback = function(v) S.aimbotFOV = v end })
+AimbotTab:CreateSlider({ Name = "smoothness", Range = {0.01, 0.2}, Increment = 0.01, CurrentValue = 0.03, Callback = function(v) S.aimbotSmoothness = v end })
+AimbotTab:CreateToggle({ Name = "show fov circle", CurrentValue = true, Callback = function(v) S.aimbotShowFOV = v end })
+AimbotTab:CreateToggle({ Name = "team check", CurrentValue = true, Callback = function(v) S.aimbotTeamCheck = v end })
+
+AimbotTab:CreateSection("silent aim (hitbox expander)")
+AimbotTab:CreateToggle({ Name = "enable silent aim", CurrentValue = false, Callback = function(v) S.silentAimEnabled = v; if v then startSilentAim() else stopSilentAim() end end })
+
+ESPTab:CreateSection("player esp")
+ESPTab:CreateToggle({ Name = "enable esp", CurrentValue = false, Callback = function(v) S.espEnabled = v; refreshESP() end })
+ESPTab:CreateToggle({ Name = "box", CurrentValue = true, Callback = function(v) S.espBox = v; if S.espEnabled then refreshESP() end end })
+ESPTab:CreateToggle({ Name = "skeleton", CurrentValue = false, Callback = function(v) S.espSkeleton = v; if S.espEnabled then refreshESP() end end })
+ESPTab:CreateToggle({ Name = "tracers", CurrentValue = false, Callback = function(v) S.espTracers = v; if S.espEnabled then refreshESP() end end })
+ESPTab:CreateColorPicker({ Name = "esp color", Color = S.espColor, Callback = function(color) S.espColor = color end })
+ESPTab:CreateToggle({ Name = "team check", CurrentValue = true, Callback = function(v) S.espTeamCheck = v end })
+
+MovementTab:CreateSection("movement")
+MovementTab:CreateToggle({ Name = "custom walkspeed", CurrentValue = false, Callback = function(v) S.walkSpeedEnabled = v end })
+MovementTab:CreateSlider({ Name = "walkspeed", Range = {16, 200}, Increment = 1, CurrentValue = 100, Callback = function(v) S.walkSpeed = v end })
+MovementTab:CreateToggle({ Name = "custom jumppower", CurrentValue = false, Callback = function(v) S.jumpPowerEnabled = v end })
+MovementTab:CreateSlider({ Name = "jumppower", Range = {50, 200}, Increment = 5, CurrentValue = 50, Callback = function(v) S.jumpPower = v end })
+MovementTab:CreateToggle({ Name = "infinite jump", CurrentValue = false, Callback = function(v) S.infJumpEnabled = v end })
+
+WeaponTab:CreateSection("weapon mods")
+WeaponTab:CreateToggle({ Name = "no recoil / no spread", CurrentValue = false, Callback = function(v) S.noRecoil = v end })
+WeaponTab:CreateToggle({ Name = "fast fire (auto + firerate)", CurrentValue = false, Callback = function(v) S.fastFire = v end })
+WeaponTab:CreateToggle({ Name = "infinite ammo", CurrentValue = false, Callback = function(v) S.infAmmo = v end })
+
+Rayfield:Notify({ Title = "Arsenal", Content = "Loaded, enjoy pookie <3", Duration = 3, Image = 4483362458 })
