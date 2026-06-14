@@ -20,7 +20,7 @@ end
 getgenv().ArsenalCyphraLoaded = true
 
 local Window = Rayfield:CreateWindow({
-    Name = "Arsenal (Cyphra Hub)",
+    Name = "Arsenal (Moon)",
     LoadingTitle = "Welcome!",
     LoadingSubtitle = "Loading...",
     ConfigurationSaving = { Enabled = true, FolderName = "ArsenalCyphra", FileName = "Config" }
@@ -381,4 +381,4 @@ MiscTab:CreateButton({Name = "destroy script", Callback = function()
 end})
 
 Rayfield:LoadConfiguration()
-Rayfield:Notify({Title = "Arsenal (Cyphra Hub)", Content = "Loaded", Duration = 3, Image = 4483362458})
+Rayfield:Notify({Title = "Arsenal (Moon)", Content = "Loaded", Duration = 3, Image = 4483362458})
