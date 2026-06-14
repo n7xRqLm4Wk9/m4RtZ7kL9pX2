@@ -11,7 +11,7 @@ local player = Players.LocalPlayer
 local camera = workspace.CurrentCamera
 
 local Window = Rayfield:CreateWindow({
-    Name = "[👮] tactical swat simulator (Cyphra Hub)",
+    Name = "[👮] tactical swat simulator (Moon)",
     LoadingTitle = "Welcome!",
     LoadingSubtitle = "Loading...",
     ConfigurationSaving = { Enabled = false }
