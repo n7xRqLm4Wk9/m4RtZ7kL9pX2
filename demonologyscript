@@ -19,7 +19,7 @@ end
 getgenv().DemonologyCyphraLoaded = true
 
 local Window = Rayfield:CreateWindow({
-    Name = "Demonology (Cyphra hub)",
+    Name = "Demonology (Moon)",
     LoadingTitle = "Welcome!",
     LoadingSubtitle = "Loading",
     ConfigurationSaving = { Enabled = true, FolderName = "DemonologyCyphra", FileName = "Config" },
@@ -623,4 +623,4 @@ MiscTab:CreateButton({Name = "unload script (destroy all)", Callback = function(
 end})
 
 Rayfield:LoadConfiguration()
-Rayfield:Notify({Title = "Demonology (Cyphra hub)", Content = "Loaded", Duration = 3, Image = 4483362458})
+Rayfield:Notify({Title = "Demonology (Moon)", Content = "Loaded", Duration = 3, Image = 4483362458})
