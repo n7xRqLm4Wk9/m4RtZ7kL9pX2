@@ -1,0 +1,955 @@
+local Rayfield = loadstring(game:HttpGet("https://sirius.menu/rayfield"))()
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local CollectionService = game:GetService("CollectionService")
+local UserInputService = game:GetService("UserInputService")
+local CoreGui = game:GetService("CoreGui")
+local TeleportService = game:GetService("TeleportService")
+local HttpService = game:GetService("HttpService")
+local Lighting = game:GetService("Lighting")
+
+local player = Players.LocalPlayer
+local camera = workspace.CurrentCamera
+
+if getgenv().RustyRaftsCyphraLoaded then
+    game:GetService("StarterGui"):SetCore("SendNotification", {
+        Title = "Already Loaded",
+        Text = "Rusty Rafts is already running",
+        Duration = 5
+    })
+    return
+end
+getgenv().RustyRaftsCyphraLoaded = true
+
+-- ==================== UI ====================
+local Window = Rayfield:CreateWindow({
+    Name = "Rusty Rafts (Cyphra Hub)",
+    LoadingTitle = "Welcome!",
+    LoadingSubtitle = "by Cyphra",
+    ConfigurationSaving = { Enabled = true, FolderName = "RustyRaftsCyphra", FileName = "Config" },
+    Discord = { Enabled = false },
+    KeySystem = false
+})
+
+local CombatTab = Window:CreateTab("combat", 4483362458)
+local FarmTab = Window:CreateTab("farm", 4483362458)
+local RaftTab = Window:CreateTab("raft", 4483362458)
+local VisualsTab = Window:CreateTab("visuals", 4483362458)
+local MovementTab = Window:CreateTab("movement", 4483362458)
+local MiscTab = Window:CreateTab("misc", 4483362458)
+
+-- ==================== STATE ====================
+local S = {
+    -- Combat
+    killAura = false,
+    teleportBehind = true,
+    auraRange = 500,
+    aimbot = false,
+    aimbotFOV = 150,
+    aimbotWallCheck = true,
+    showFOV = true,
+    noRecoil = false,
+    fastBullets = false,
+    longRange = false,
+    autoFire = false,
+
+    -- Farm
+    autoGrab = false,
+    autoGrabRange = 50,
+    grabTools = true,
+    grabArmor = true,
+    grabLootBox = true,
+    instantPrompts = false,
+    autoLoot = false,
+    autoLootRange = 200,
+    autoBandage = false,
+    autoRepair = false,
+
+    -- Visuals
+    espMobs = false,
+    espLootBox = false,
+    espTools = false,
+    espArmor = false,
+    espDrifting = false,
+    espShowNames = true,
+    fullbright = false,
+
+    -- Movement / Raft
+    speed = false,
+    infJump = false,
+    fly = false,
+    raftDriftSpeed = -14,
+}
+
+local ESP_COLORS = {
+    Mob      = Color3.fromRGB(230, 80, 80),
+    LootBox  = Color3.fromRGB(255, 180, 60),
+    Tool     = Color3.fromRGB(85, 220, 130),
+    Armor    = Color3.fromRGB(180, 130, 255),
+    Drifting = Color3.fromRGB(255, 250, 100),
+}
+
+-- ==================== GLOBALS ====================
+local remote = ReplicatedStorage:WaitForChild("BridgeNet2"):WaitForChild("dataRemoteEvent")
+local GunConfig = require(ReplicatedStorage.Shared.GunConfig)
+local origGetGunData = GunConfig.GetGunData
+local origTracerSpeed = GunConfig.TracerSpeed
+local origMaxDist = GunConfig.BulletMaxDistance
+
+-- ==================== UTILITY ====================
+local function isVisible(part)
+    if not part then return false end
+    local origin = camera.CFrame.Position
+    local direction = part.Position - origin
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Blacklist
+    params.FilterDescendantsInstances = { player.Character or {} }
+    return Workspace:Raycast(origin, direction.Unit * direction.Magnitude, params) == nil
+end
+
+local function findNearestMob(maxRange)
+    local cam = camera.CFrame
+    local closest, closestDist = nil, maxRange or math.huge
+    for _, mob in ipairs(CollectionService:GetTagged("Mob")) do
+        local hum = mob:FindFirstChildOfClass("Humanoid")
+        if hum and hum.Health > 0 then
+            local hrp = mob:FindFirstChild("HumanoidRootPart") or mob.PrimaryPart
+            if hrp then
+                local dist = (hrp.Position - cam.Position).Magnitude
+                if dist < closestDist then
+                    closest = hrp
+                    closestDist = dist
+                end
+            end
+        end
+    end
+    return closest
+end
+
+local function getMobInCrosshair()
+    if not camera then return nil end
+    local lookDir, camPos = camera.CFrame.LookVector, camera.CFrame.Position
+    local bestTarget, bestDot = nil, math.cos(math.rad(30))
+    for _, mob in ipairs(CollectionService:GetTagged("Mob")) do
+        local head = mob:FindFirstChild("Head")
+        if head then
+            if S.aimbotWallCheck and not isVisible(head) then
+                -- skip this mob
+            else
+                local dir = (head.Position - camPos).Unit
+                local dot = lookDir:Dot(dir)
+                if dot > bestDot then
+                    bestDot = dot
+                    bestTarget = head
+                end
+            end
+        end
+    end
+    return bestTarget
+end
+
+local function getEquippedTool()
+    local char = player.Character
+    if not char then return nil end
+    for _, v in ipairs(char:GetChildren()) do
+        if v:IsA("Tool") and v:FindFirstChild("Handle") then
+            return v
+        end
+    end
+    return nil
+end
+
+local function swingAtPosition(targetPos, tool)
+    if not remote or not tool then return false end
+    local swingId = tostring(math.random() * 100000) .. "_" .. math.random(10000, 99999)
+    pcall(function()
+        remote:FireServer({
+            { swingId = swingId, targetPosition = targetPos, tool = tool },
+            "\025"
+        })
+    end)
+    return true
+end
+
+-- ==================== GUN MODS ====================
+GunConfig.GetGunData = function(p)
+    local data = origGetGunData(p)
+    if data and S.noRecoil then
+        data.KickbackIntensity = 0
+    end
+    return data
+end
+
+task.spawn(function()
+    while getgenv().RustyRaftsCyphraLoaded do
+        GunConfig.TracerSpeed = S.fastBullets and 2500 or origTracerSpeed
+        GunConfig.BulletMaxDistance = S.longRange and 5000 or origMaxDist
+        task.wait(0.5)
+    end
+end)
+
+-- ==================== KILL AURA ====================
+local killAuraOrigin = nil
+
+task.spawn(function()
+    while getgenv().RustyRaftsCyphraLoaded do
+        if S.killAura then
+            local mobRoot = findNearestMob(S.auraRange)
+            if mobRoot then
+                if not killAuraOrigin then
+                    local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+                    if root then
+                        killAuraOrigin = root.CFrame
+                    end
+                end
+                local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+                if root then
+                    if S.teleportBehind then
+                        root.CFrame = mobRoot.CFrame * CFrame.new(0, 0, 3)
+                    else
+                        root.CFrame = mobRoot.CFrame + Vector3.new(0, 3, 0)
+                    end
+                    swingAtPosition(mobRoot.Position, getEquippedTool())
+                end
+            else
+                if killAuraOrigin then
+                    local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+                    if root then
+                        root.CFrame = killAuraOrigin
+                    end
+                    killAuraOrigin = nil
+                end
+            end
+        else
+            killAuraOrigin = nil
+        end
+        task.wait(0.5)
+    end
+end)
+
+-- ==================== AIMBOT ====================
+local FOVCircle = Drawing.new("Circle")
+FOVCircle.Visible = false
+FOVCircle.Thickness = 1
+FOVCircle.Filled = false
+FOVCircle.Color = Color3.fromRGB(255, 255, 255)
+FOVCircle.NumSides = 64
+FOVCircle.Radius = S.aimbotFOV
+
+local aimbotConn
+
+local function startAimbot()
+    if aimbotConn then aimbotConn:Disconnect() end
+    if S.showFOV then FOVCircle.Visible = true end
+    aimbotConn = RunService.RenderStepped:Connect(function()
+        if not S.aimbot then return end
+        local vp = camera.ViewportSize
+        FOVCircle.Position = Vector2.new(vp.X / 2, vp.Y / 2)
+        FOVCircle.Radius = S.aimbotFOV
+        FOVCircle.Visible = S.showFOV
+        local target = getMobInCrosshair()
+        if target then
+            camera.CFrame = camera.CFrame:Lerp(CFrame.new(camera.CFrame.Position, target.Position), 0.5)
+        end
+    end)
+end
+
+local function stopAimbot()
+    S.aimbot = false
+    if aimbotConn then aimbotConn:Disconnect(); aimbotConn = nil end
+    FOVCircle.Visible = false
+end
+
+-- ==================== AUTO GRAB ====================
+local lastGrab = 0
+task.spawn(function()
+    while getgenv().RustyRaftsCyphraLoaded do
+        if S.instantPrompts then
+            for _, d in ipairs(Workspace:GetDescendants()) do
+                if d:IsA("ProximityPrompt") and d.HoldDuration > 0 then
+                    d.HoldDuration = 0
+                end
+            end
+        end
+
+        if S.autoGrab and tick() - lastGrab >= 0.15 then
+            lastGrab = tick()
+            local char = player.Character
+            local hrp = char and char:FindFirstChild("HumanoidRootPart")
+            if hrp then
+                local hrpPos = hrp.Position
+                for _, d in ipairs(Workspace:GetDescendants()) do
+                    if d:IsA("ProximityPrompt") and d.Enabled then
+                        local ok = false
+                        local isHold = false
+                        if d.Name == "PickupPrompt" and S.grabTools then
+                            ok = true
+                        elseif d.Name == "EquipPrompt" and S.grabArmor then
+                            ok = true
+                        elseif d.Name == "OpenPrompt" and S.grabLootBox then
+                            ok = true
+                            isHold = true
+                        end
+                        if ok then
+                            local part = d.Parent
+                            if part and part:IsA("BasePart") and (part.Position - hrpPos).Magnitude <= S.autoGrabRange then
+                                if isHold and d.HoldDuration > 0 then
+                                    pcall(fireproximityprompt, d)
+                                    task.wait(d.HoldDuration)
+                                    pcall(fireproximityprompt, d)
+                                else
+                                    pcall(fireproximityprompt, d)
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        task.wait(0.1)
+    end
+end)
+
+-- ==================== AUTO LOOT BARRELS/CRATES ====================
+local lastLoot = 0
+task.spawn(function()
+    while getgenv().RustyRaftsCyphraLoaded do
+        if S.autoLoot and tick() - lastLoot >= 1 then
+            lastLoot = tick()
+            local char = player.Character
+            local hrp = char and char:FindFirstChild("HumanoidRootPart")
+            if hrp then
+                local bestPrompt, bestDist = nil, S.autoLootRange
+                for _, d in ipairs(Workspace:GetDescendants()) do
+                    if d:IsA("ProximityPrompt") and d.Enabled and d.Name == "OpenPrompt" then
+                        local part = d.Parent
+                        if part and part:IsA("BasePart") then
+                            local dist = (hrp.Position - part.Position).Magnitude
+                            if dist < bestDist then
+                                bestDist = dist
+                                bestPrompt = d
+                            end
+                        end
+                    end
+                end
+
+                if bestPrompt then
+                    local part = bestPrompt.Parent
+                    hrp.CFrame = CFrame.new(part.Position + Vector3.new(0, 3, 0))
+                    task.wait(0.2)
+                    pcall(fireproximityprompt, bestPrompt)
+                    task.wait(0.3)
+                    for _, d in ipairs(Workspace:GetDescendants()) do
+                        if d:IsA("ProximityPrompt") and d.Enabled and d.Name == "PickupPrompt" then
+                            local p = d.Parent
+                            if p and p:IsA("BasePart") and (p.Position - part.Position).Magnitude <= 10 then
+                                pcall(fireproximityprompt, d)
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        task.wait(0.5)
+    end
+end)
+
+-- ==================== AUTO BANDAGE ====================
+task.spawn(function()
+    while getgenv().RustyRaftsCyphraLoaded do
+        if S.autoBandage then
+            local hum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+            if hum and hum.Health < hum.MaxHealth then
+                local bandage = nil
+                for _, tool in ipairs(player.Backpack:GetChildren()) do
+                    if tool:IsA("Tool") and tool.Name == "Bandage" then
+                        bandage = tool
+                        break
+                    end
+                end
+                if bandage then
+                    if bandage.Parent == player.Backpack then
+                        hum:EquipTool(bandage)
+                        task.wait(0.1)
+                    end
+                    local handle = bandage:FindFirstChild("Handle")
+                    if handle then
+                        for _, d in ipairs(handle:GetDescendants()) do
+                            if d:IsA("ProximityPrompt") and d.Enabled then
+                                if d.HoldDuration > 0 then d.HoldDuration = 0 end
+                                pcall(fireproximityprompt, d)
+                                break
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        task.wait(0.3)
+    end
+end)
+
+-- ==================== AUTO REPAIR ====================
+local lastRepair = 0
+task.spawn(function()
+    while getgenv().RustyRaftsCyphraLoaded do
+        if S.autoRepair and tick() - lastRepair >= 0.5 then
+            lastRepair = tick()
+            local tool = getEquippedTool()
+            if tool and tool.Name == "Repair Hammer" then
+                local char = player.Character
+                local hrp = char and char:FindFirstChild("HumanoidRootPart")
+                if hrp then
+                    for _, v in ipairs(Workspace:GetDescendants()) do
+                        if v:IsA("BasePart") and v:FindFirstChild("HealthBar") then
+                            local dist = (v.Position - hrp.Position).Magnitude
+                            -- Range roughly matches tool attributes, slightly padded
+                            if dist <= 12 then 
+                                swingAtPosition(v.Position, tool)
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        task.wait(0.2)
+    end
+end)
+
+-- ==================== ESP ====================
+local espObjects = {}
+
+local function clearESP()
+    for _, e in pairs(espObjects) do
+        if e.h then pcall(function() e.h:Destroy() end) end
+        if e.b then pcall(function() e.b:Destroy() end) end
+    end
+    espObjects = {}
+end
+
+local function getDetailedLabel(model)
+    local name = model:GetAttribute("ObjectName") or model.Name
+    local subtitle = model:GetAttribute("ObjectSubtitle")
+    if subtitle then
+        return name .. "\n[" .. subtitle .. "]"
+    end
+    return name
+end
+
+local function addOrUpdateESP(model, color, label)
+    local entry = espObjects[model]
+    if not entry then
+        local h = Instance.new("Highlight")
+        h.FillTransparency = 0.65
+        h.OutlineTransparency = 0
+        h.FillColor = color
+        h.OutlineColor = color
+        h.Adornee = model
+        h.Parent = CoreGui
+
+        local adornee
+        if model:IsA("BasePart") then
+            adornee = model
+        elseif model:IsA("Tool") then
+            adornee = model:FindFirstChild("Handle")
+        elseif model:IsA("Model") then
+            adornee = model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart")
+        end
+
+        local b
+        if S.espShowNames and adornee then
+            b = Instance.new("BillboardGui")
+            b.Adornee = adornee
+            b.Size = UDim2.fromOffset(120, 36) -- Increased size to accommodate subtitle
+            b.AlwaysOnTop = true
+            b.StudsOffset = Vector3.new(0, 2, 0)
+            b.MaxDistance = 1000
+            pcall(function() b.Parent = CoreGui end)
+            local lbl = Instance.new("TextLabel")
+            lbl.Size = UDim2.fromScale(1, 1)
+            lbl.BackgroundTransparency = 1
+            lbl.Font = Enum.Font.GothamBold
+            lbl.Text = label or getDetailedLabel(model)
+            lbl.TextColor3 = color
+            lbl.TextStrokeTransparency = 0
+            lbl.TextSize = 12
+            lbl.Parent = b
+        end
+
+        entry = { h = h, b = b, color = color }
+        espObjects[model] = entry
+    elseif entry.color ~= color then
+        entry.h.FillColor = color
+        entry.h.OutlineColor = color
+        if entry.b then
+            local lbl = entry.b:FindFirstChildWhichIsA("TextLabel")
+            if lbl then lbl.TextColor3 = color end
+        end
+        entry.color = color
+    end
+end
+
+local lastESP = 0
+task.spawn(function()
+    while getgenv().RustyRaftsCyphraLoaded do
+        local hasESP = S.espMobs or S.espLootBox or S.espTools or S.espArmor or S.espDrifting
+        if not hasESP then
+            if next(espObjects) then clearESP() end
+            task.wait(1)
+        elseif tick() - lastESP >= 0.6 then
+            lastESP = tick()
+            local seen = {}
+
+            if S.espMobs then
+                for _, m in ipairs(CollectionService:GetTagged("Mob")) do
+                    if m:IsA("Model") then
+                        local hum = m:FindFirstChildOfClass("Humanoid")
+                        if hum and hum.Health > 0 then
+                            seen[m] = true
+                            addOrUpdateESP(m, ESP_COLORS.Mob, m.Name)
+                        end
+                    end
+                end
+            end
+
+            if S.espDrifting then
+                for _, m in ipairs(CollectionService:GetTagged("DriftingLoot")) do
+                    if m.Parent then
+                        seen[m] = true
+                        addOrUpdateESP(m, ESP_COLORS.Drifting, getDetailedLabel(m))
+                    end
+                end
+            end
+
+            if S.espLootBox then
+                for _, m in ipairs(CollectionService:GetTagged("LootBox")) do
+                    if m.Parent and not seen[m] then
+                        seen[m] = true
+                        addOrUpdateESP(m, ESP_COLORS.LootBox, getDetailedLabel(m))
+                    end
+                end
+                for _, m in ipairs(CollectionService:GetTagged("Draggable")) do
+                    if m:IsA("Model") and not seen[m] and m:GetAttribute("ObjectSubtitle") == "Lootable" then
+                        seen[m] = true
+                        addOrUpdateESP(m, ESP_COLORS.LootBox, getDetailedLabel(m))
+                    end
+                end
+            end
+
+            if S.espTools then
+                for _, t in ipairs(Workspace:GetDescendants()) do
+                    if t:IsA("Tool") and t:FindFirstChild("Handle") and CollectionService:HasTag(t, "PickupableTool") then
+                        seen[t] = true
+                        addOrUpdateESP(t, ESP_COLORS.Tool, getDetailedLabel(t))
+                    end
+                end
+            end
+
+            if S.espArmor then
+                for _, a in ipairs(CollectionService:GetTagged("ArmorPiece")) do
+                    if a.Parent and not seen[a] then
+                        seen[a] = true
+                        addOrUpdateESP(a, ESP_COLORS.Armor, getDetailedLabel(a))
+                    end
+                end
+            end
+
+            for m, e in pairs(espObjects) do
+                if not seen[m] or not m.Parent then
+                    if e.h then pcall(function() e.h:Destroy() end) end
+                    if e.b then pcall(function() e.b:Destroy() end) end
+                    espObjects[m] = nil
+                end
+            end
+        end
+        task.wait(0.1)
+    end
+end)
+
+-- ==================== MOVEMENT ====================
+RunService.RenderStepped:Connect(function()
+    local char = player.Character
+    if not char then return end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not hum then return end
+    if S.speed then hum.WalkSpeed = 50 end
+end)
+
+UserInputService.JumpRequest:Connect(function()
+    if S.infJump and player.Character then
+        pcall(function()
+            player.Character.Humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+        end)
+    end
+end)
+
+-- ==================== FLY ====================
+local flyBV, flyBG, flyConn
+
+local function startFly()
+    local char = player.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+    flyBV = Instance.new("BodyVelocity")
+    flyBV.MaxForce = Vector3.new(1e9, 1e9, 1e9)
+    flyBV.Velocity = Vector3.zero
+    flyBV.Parent = hrp
+    flyBG = Instance.new("BodyGyro")
+    flyBG.MaxTorque = Vector3.new(1e9, 1e9, 1e9)
+    flyBG.P = 1e4
+    flyBG.CFrame = hrp.CFrame
+    flyBG.Parent = hrp
+    flyConn = RunService.RenderStepped:Connect(function()
+        if not S.fly or not hrp.Parent then return end
+        local cam = camera.CFrame
+        local move = Vector3.zero
+        if UserInputService:IsKeyDown(Enum.KeyCode.W) then move = move + cam.LookVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.S) then move = move - cam.LookVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.A) then move = move - cam.RightVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.D) then move = move + cam.RightVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.Space) then move = move + Vector3.new(0, 1, 0) end
+        if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then move = move - Vector3.new(0, 1, 0) end
+        if move.Magnitude > 0 then
+            move = move.Unit * 60
+        else
+            move = Vector3.zero
+        end
+        flyBV.Velocity = move
+        flyBG.CFrame = cam
+    end)
+end
+
+local function stopFly()
+    if flyBV then flyBV:Destroy(); flyBV = nil end
+    if flyBG then flyBG:Destroy(); flyBG = nil end
+    if flyConn then flyConn:Disconnect(); flyConn = nil end
+end
+
+-- ==================== FULLBRIGHT ====================
+local origAmbient, origFog
+task.spawn(function()
+    while getgenv().RustyRaftsCyphraLoaded do
+        if S.fullbright then
+            if not origAmbient then
+                origAmbient = Lighting.Ambient
+                origFog = Lighting.FogEnd
+            end
+            Lighting.Ambient = Color3.new(1, 1, 1)
+            Lighting.FogEnd = 100000
+        elseif origAmbient then
+            Lighting.Ambient = origAmbient
+            Lighting.FogEnd = origFog
+            origAmbient = nil
+        end
+        task.wait(1)
+    end
+end)
+
+-- ==================== UI SETUP ====================
+CombatTab:CreateSection("Kill Aura")
+CombatTab:CreateToggle({
+    Name = "Enable Kill Aura",
+    CurrentValue = false,
+    Flag = "KillAura",
+    Callback = function(v)
+        S.killAura = v
+        if not v then killAuraOrigin = nil end
+    end
+})
+CombatTab:CreateToggle({
+    Name = "Teleport Behind Mob",
+    CurrentValue = true,
+    Flag = "TeleBehind",
+    Callback = function(v) S.teleportBehind = v end
+})
+CombatTab:CreateSlider({
+    Name = "Aura Range",
+    Range = { 50, 1000 },
+    Increment = 10,
+    CurrentValue = 500,
+    Flag = "AuraRange",
+    Callback = function(v) S.auraRange = v end
+})
+
+CombatTab:CreateSection("Mob Aimbot")
+CombatTab:CreateToggle({
+    Name = "Enable Aimbot",
+    CurrentValue = false,
+    Flag = "Aimbot",
+    Callback = function(v)
+        S.aimbot = v
+        if v then startAimbot() else stopAimbot() end
+    end
+})
+CombatTab:CreateSlider({
+    Name = "FOV Radius",
+    Range = { 50, 400 },
+    Increment = 10,
+    CurrentValue = 150,
+    Flag = "AimbotFOV",
+    Callback = function(v)
+        S.aimbotFOV = v
+        if FOVCircle then FOVCircle.Radius = v end
+    end
+})
+CombatTab:CreateToggle({
+    Name = "Wall Check",
+    CurrentValue = true,
+    Flag = "AimbotWallCheck",
+    Callback = function(v) S.aimbotWallCheck = v end
+})
+CombatTab:CreateToggle({
+    Name = "Show FOV Circle",
+    CurrentValue = true,
+    Flag = "ShowFOV",
+    Callback = function(v)
+        S.showFOV = v
+        if FOVCircle then FOVCircle.Visible = v and S.aimbot end
+    end
+})
+
+CombatTab:CreateSection("Gun Mods")
+CombatTab:CreateToggle({
+    Name = "No Recoil",
+    CurrentValue = false,
+    Flag = "NoRecoil",
+    Callback = function(v) S.noRecoil = v end
+})
+CombatTab:CreateToggle({
+    Name = "Fast Bullets",
+    CurrentValue = false,
+    Flag = "FastBullets",
+    Callback = function(v) S.fastBullets = v end
+})
+CombatTab:CreateToggle({
+    Name = "Long Range",
+    CurrentValue = false,
+    Flag = "LongRange",
+    Callback = function(v) S.longRange = v end
+})
+CombatTab:CreateToggle({
+    Name = "Auto Fire",
+    CurrentValue = false,
+    Flag = "AutoFire",
+    Callback = function(v) S.autoFire = v end
+})
+
+FarmTab:CreateSection("Auto Grab")
+FarmTab:CreateToggle({
+    Name = "Auto Grab Items",
+    CurrentValue = false,
+    Flag = "AutoGrab",
+    Callback = function(v) S.autoGrab = v end
+})
+FarmTab:CreateSlider({
+    Name = "Grab Range",
+    Range = { 10, 200 },
+    Increment = 5,
+    CurrentValue = 50,
+    Flag = "GrabRange",
+    Callback = function(v) S.autoGrabRange = v end
+})
+FarmTab:CreateToggle({
+    Name = "Grab Tools",
+    CurrentValue = true,
+    Flag = "GrabTools",
+    Callback = function(v) S.grabTools = v end
+})
+FarmTab:CreateToggle({
+    Name = "Grab Armor",
+    CurrentValue = true,
+    Flag = "GrabArmor",
+    Callback = function(v) S.grabArmor = v end
+})
+FarmTab:CreateToggle({
+    Name = "Open Loot Boxes",
+    CurrentValue = true,
+    Flag = "GrabLootBox",
+    Callback = function(v) S.grabLootBox = v end
+})
+FarmTab:CreateToggle({
+    Name = "Instant Prompts",
+    CurrentValue = false,
+    Flag = "InstantPrompts",
+    Callback = function(v) S.instantPrompts = v end
+})
+
+FarmTab:CreateSection("Auto Loot")
+FarmTab:CreateToggle({
+    Name = "Auto Loot Barrels/Crates",
+    CurrentValue = false,
+    Flag = "AutoLoot",
+    Callback = function(v) S.autoLoot = v end
+})
+FarmTab:CreateSlider({
+    Name = "Loot Range",
+    Range = { 50, 500 },
+    Increment = 10,
+    CurrentValue = 200,
+    Flag = "LootRange",
+    Callback = function(v) S.autoLootRange = v end
+})
+
+FarmTab:CreateSection("Tools")
+FarmTab:CreateToggle({
+    Name = "Auto Bandage (Instant)",
+    CurrentValue = false,
+    Flag = "AutoBandage",
+    Callback = function(v) S.autoBandage = v end
+})
+FarmTab:CreateToggle({
+    Name = "Auto Repair Raft Parts",
+    CurrentValue = false,
+    Flag = "AutoRepair",
+    Callback = function(v) S.autoRepair = v end
+})
+
+RaftTab:CreateSection("Raft Configuration")
+RaftTab:CreateSlider({
+    Name = "Raft Drift Speed",
+    Range = {-100, 100},
+    Increment = 1,
+    CurrentValue = -14,
+    Flag = "RaftDriftSpeed",
+    Callback = function(v)
+        local floatingObjects = Workspace:FindFirstChild("FloatingObjects")
+        if floatingObjects then
+            local group = floatingObjects:FindFirstChild("WeldedGroup_1")
+            if group and group:FindFirstChild("PlayerRaftMassCenter") then
+                group.PlayerRaftMassCenter:SetAttribute("DriftSpeed", v)
+            end
+        end
+    end
+})
+
+VisualsTab:CreateSection("ESP")
+VisualsTab:CreateToggle({
+    Name = "Mob ESP",
+    CurrentValue = false,
+    Flag = "ESPMobs",
+    Callback = function(v) S.espMobs = v end
+})
+VisualsTab:CreateToggle({
+    Name = "Loot Box ESP",
+    CurrentValue = false,
+    Flag = "ESPLootBox",
+    Callback = function(v) S.espLootBox = v end
+})
+VisualsTab:CreateToggle({
+    Name = "Tool ESP",
+    CurrentValue = false,
+    Flag = "ESPTools",
+    Callback = function(v) S.espTools = v end
+})
+VisualsTab:CreateToggle({
+    Name = "Armor ESP",
+    CurrentValue = false,
+    Flag = "ESPArmor",
+    Callback = function(v) S.espArmor = v end
+})
+VisualsTab:CreateToggle({
+    Name = "Drifting Loot ESP",
+    CurrentValue = false,
+    Flag = "ESPDrifting",
+    Callback = function(v) S.espDrifting = v end
+})
+VisualsTab:CreateToggle({
+    Name = "Show Names & Attributes",
+    CurrentValue = true,
+    Flag = "ESPShowNames",
+    Callback = function(v) S.espShowNames = v end
+})
+
+MovementTab:CreateSection("Movement")
+MovementTab:CreateToggle({
+    Name = "Speed Boost",
+    CurrentValue = false,
+    Flag = "Speed",
+    Callback = function(v) S.speed = v end
+})
+MovementTab:CreateToggle({
+    Name = "Infinite Jump",
+    CurrentValue = false,
+    Flag = "InfJump",
+    Callback = function(v) S.infJump = v end
+})
+MovementTab:CreateToggle({
+    Name = "Fly",
+    CurrentValue = false,
+    Flag = "Fly",
+    Callback = function(v)
+        if v then startFly() else stopFly() end
+    end
+})
+
+VisualsTab:CreateSection("World")
+VisualsTab:CreateToggle({
+    Name = "Fullbright",
+    CurrentValue = false,
+    Flag = "Fullbright",
+    Callback = function(v) S.fullbright = v end
+})
+
+MiscTab:CreateSection("Server")
+MiscTab:CreateButton({
+    Name = "Rejoin",
+    Callback = function() TeleportService:Teleport(game.PlaceId, player) end
+})
+MiscTab:CreateButton({
+    Name = "Server Hop",
+    Callback = function()
+        local ok, servers = pcall(function()
+            return HttpService:JSONDecode(game:HttpGet("https://games.roblox.com/v1/games/" .. game.PlaceId .. "/servers/Public?limit=100"))
+        end)
+        if ok and servers.data then
+            for _, s in ipairs(servers.data) do
+                if s.id ~= game.JobId then
+                    TeleportService:TeleportToPlaceInstance(game.PlaceId, s.id, player)
+                    return
+                end
+            end
+        end
+    end
+})
+
+MiscTab:CreateSection("Config")
+MiscTab:CreateButton({
+    Name = "Save Config",
+    Callback = function() Rayfield:SaveConfiguration() end
+})
+MiscTab:CreateButton({
+    Name = "Load Config",
+    Callback = function() Rayfield:LoadConfiguration() end
+})
+
+MiscTab:CreateSection("Unload")
+MiscTab:CreateButton({
+    Name = "Destroy Script",
+    Callback = function()
+        getgenv().RustyRaftsCyphraLoaded = nil
+        pcall(function() GunConfig.GetGunData = origGetGunData end)
+        pcall(function()
+            GunConfig.TracerSpeed = origTracerSpeed
+            GunConfig.BulletMaxDistance = origMaxDist
+        end)
+        if origAmbient then
+            Lighting.Ambient = origAmbient
+            Lighting.FogEnd = origFog
+        end
+        stopFly()
+        stopAimbot()
+        clearESP()
+        if FOVCircle then FOVCircle:Remove() end
+        Rayfield:Destroy()
+    end
+})
+
+Rayfield:LoadConfiguration()
+Rayfield:Notify({
+    Title = "Rusty Rafts (Moon)",
+    Content = "Full script loaded with advanced modules!",
+    Duration = 3,
+    Image = 4483362458
+})
