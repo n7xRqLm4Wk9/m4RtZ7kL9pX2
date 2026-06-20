@@ -25,9 +25,9 @@ getgenv().RustyRaftsCyphraLoaded = true
 
 -- ==================== UI ====================
 local Window = Rayfield:CreateWindow({
-    Name = "Rusty Rafts (Cyphra Hub)",
+    Name = "Rusty Rafts (Moon)",
     LoadingTitle = "Welcome!",
-    LoadingSubtitle = "by Cyphra",
+    LoadingSubtitle = "Loaded",
     ConfigurationSaving = { Enabled = true, FolderName = "RustyRaftsCyphra", FileName = "Config" },
     Discord = { Enabled = false },
     KeySystem = false
@@ -949,7 +949,7 @@ MiscTab:CreateButton({
 Rayfield:LoadConfiguration()
 Rayfield:Notify({
     Title = "Rusty Rafts (Moon)",
-    Content = "Full script loaded with advanced modules!",
+    Content = "Loaded, enjoy pookie <3",
     Duration = 3,
     Image = 4483362458
 })
