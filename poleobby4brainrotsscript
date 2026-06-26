@@ -1,0 +1,67 @@
+local Rayfield = loadstring(game:HttpGet("https://sirius.menu/rayfield"))()
+
+local Window = Rayfield:CreateWindow({
+    Name = "Pole Obby (Moon)",
+    LoadingTitle = "Loading...",
+    LoadingSubtitle = "Auto Farm",
+    ConfigurationSaving = { Enabled = true, FolderName = "MoonHub", FileName = "PoleObby" },
+    Discord = { Enabled = false },
+    KeySystem = false
+})
+
+local Tab = Window:CreateTab("Auto Farm", 4483362458)
+local plr = game:GetService("Players").LocalPlayer
+local farming = false
+
+Tab:CreateToggle({
+    Name = "Farm OG/Admin Brainrots",
+    CurrentValue = false,
+    Flag = "PoleObby_Farm",
+    Callback = function(v)
+        farming = v
+        if v then
+            task.spawn(function()
+                while farming do
+                    pcall(function()
+                        local mobs = workspace.Mobs
+                        if mobs then
+                            for _, v in pairs(mobs:GetChildren()) do
+                                if v.PrimaryPart then
+                                    local overhead = v.PrimaryPart:FindFirstChild("OverheadAttach")
+                                    if overhead then
+                                        local animal = overhead:FindFirstChild("AnimalOverhead")
+                                        if animal then
+                                            local rarityLabel = animal:FindFirstChild("Rarity")
+                                            if rarityLabel then
+                                                local rarity = rarityLabel.Text
+                                                if rarity == "OG" or rarity == "Admin" then
+                                                    plr.Character:MoveTo(v.PrimaryPart.Position)
+                                                    local prompt = v.PrimaryPart:FindFirstChildOfClass("ProximityPrompt")
+                                                    if prompt then
+                                                        repeat
+                                                            fireproximityprompt(prompt)
+                                                            task.wait()
+                                                        until not v or not v.PrimaryPart or v.PrimaryPart:FindFirstChild("MobCarryWeld")
+                                                        local safeEvent = game:GetService("ReplicatedStorage").Packages.Net["RE/SafeZoneEvent"]
+                                                        if safeEvent then
+                                                            safeEvent:FireServer()
+                                                        end
+                                                        task.wait(0.1)
+                                                    end
+                                                end
+                                            end
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                    end)
+                    task.wait(0.1)
+                end
+            end)
+        end
+    end
+})
+
+Rayfield:LoadConfiguration()
+Rayfield:Notify({ Title = "Pole Obby (Moon)", Content = "Loaded", Duration = 3 })
