@@ -1,0 +1,88 @@
+local Rayfield = loadstring(game:HttpGet("https://sirius.menu/rayfield"))()
+
+local Window = Rayfield:CreateWindow({
+    Name = "Speed Evolve (Moon)",
+    LoadingTitle = "Loading...",
+    LoadingSubtitle = "Auto Farm",
+    ConfigurationSaving = { Enabled = true, FolderName = "MoonHub", FileName = "SpeedEvolve" },
+    Discord = { Enabled = false },
+    KeySystem = false
+})
+
+local Tab = Window:CreateTab("Auto Farm", 4483362458)
+local plr = game:GetService("Players").LocalPlayer
+local AutoSpeed = false
+local FarmWins = false
+local FarmEvolve = false
+
+Tab:CreateSection("Auto Speed")
+Tab:CreateToggle({
+    Name = "Auto Speed",
+    CurrentValue = false,
+    Flag = "SpeedEvolve_AutoSpeed",
+    Callback = function(v)
+        AutoSpeed = v
+        if v then
+            task.spawn(function()
+                while AutoSpeed do
+                    pcall(function()
+                        local remote = game:GetService("ReplicatedStorage"):WaitForChild("Modules"):WaitForChild("Shared"):WaitForChild("RemoteEventService"):WaitForChild("AddSpeedRemoteEvent")
+                        remote:FireServer()
+                    end)
+                    task.wait()
+                end
+            end)
+        end
+    end
+})
+
+Tab:CreateSection("Auto Win")
+Tab:CreateToggle({
+    Name = "Auto Win",
+    CurrentValue = false,
+    Flag = "SpeedEvolve_AutoWin",
+    Callback = function(v)
+        FarmWins = v
+        if v then
+            task.spawn(function()
+                while FarmWins do
+                    local winsFold = workspace.Wins
+                    if winsFold then
+                        for _, v in pairs(winsFold:GetChildren()) do
+                            pcall(function()
+                                plr.Character:PivotTo(v:GetPivot())
+                            end)
+                            task.wait(1)
+                        end
+                    end
+                    task.wait(0.25)
+                end
+            end)
+        end
+    end
+})
+
+Tab:CreateSection("Auto Evolve")
+Tab:CreateToggle({
+    Name = "Auto Evolve",
+    CurrentValue = false,
+    Flag = "SpeedEvolve_AutoEvolve",
+    Callback = function(v)
+        FarmEvolve = v
+        if v then
+            task.spawn(function()
+                while FarmEvolve do
+                    pcall(function()
+                        local args = {{ Action = "Evolve" }}
+                        local remote = game:GetService("ReplicatedStorage"):WaitForChild("Modules"):WaitForChild("Shared"):WaitForChild("RemoteEventService"):WaitForChild("EvolutionRemoteEvent")
+                        remote:FireServer(unpack(args))
+                    end)
+                    task.wait(1)
+                end
+            end)
+        end
+    end
+})
+
+Rayfield:LoadConfiguration()
+Rayfield:Notify({ Title = "Speed Evolve (Moon)", Content = "Loaded", Duration = 3 })
